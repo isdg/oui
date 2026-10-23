@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod extras;
+pub mod geometry;
 pub mod history;
 pub mod keyboard;
 pub mod plot;

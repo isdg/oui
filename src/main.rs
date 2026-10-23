@@ -34,7 +34,7 @@ const DRILL: usize = 3;
 struct Cli {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
-    /// Bundled word list to draw from: english or french.
+    /// Bundled word list to draw from: english, french or russian.
     #[arg(short, long, default_value = "english", conflicts_with = "file")]
     language: String,
     /// Number of words in the test (default 50, or the whole file).
@@ -43,9 +43,10 @@ struct Cli {
     /// Make it a timed test of this many seconds.
     #[arg(short, long)]
     time: Option<NonZeroU64>,
-    /// Keyboard layout the heatmap is drawn on.
-    #[arg(short = 'k', long, value_enum, default_value_t = Layout::Qwerty)]
-    layout: Layout,
+    /// Keyboard layout the heatmap is drawn on; detected from the words by
+    /// default, so Russian text gets ЙЦУКЕН.
+    #[arg(short = 'k', long, value_enum)]
+    layout: Option<Layout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,7 +213,8 @@ fn main() -> Result<()> {
         Limit::Words(n) => format!("{name} · {n} words"),
         Limit::Time(d) => format!("{name} · {}s", d.as_secs()),
     };
-    let app = App::new(source, limit, cli.layout, title);
+    let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
+    let app = App::new(source, limit, layout, title);
     ratatui::run(|terminal| run(terminal, app))
 }
 
@@ -288,7 +290,8 @@ mod tests {
         let (source, name) = source(&cli).unwrap();
         assert_eq!(name, "english");
         assert_eq!(limit(&cli, &source), Limit::Words(50));
-        assert_eq!(cli.layout, Layout::Qwerty);
+        assert_eq!(cli.layout, None);
+        assert_eq!(Layout::detect(source.words()), Layout::Qwerty);
     }
 
     #[test]
@@ -311,12 +314,17 @@ mod tests {
         assert!(parse(&["-w", "0"]).is_err());
         assert!(parse(&["notes.txt", "-l", "french"]).is_err());
         assert!(parse(&["-k", "qwerty", "-l", "french"]).is_ok());
+        assert!(parse(&["-k", "йцукен"])
+            .is_ok_and(|c| c.layout == Some(Layout::Jcuken)));
     }
 
     #[test]
     fn unknown_language_lists_the_bundled_ones() {
         let err = source(&cli(&["-l", "klingon"])).unwrap_err().to_string();
-        assert_eq!(err, "unknown language 'klingon' (have english, french)");
+        assert_eq!(
+            err,
+            "unknown language 'klingon' (have english, french, russian)"
+        );
     }
 
     #[test]

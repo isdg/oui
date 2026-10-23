@@ -12,6 +12,9 @@ use crate::stats::Tally;
 pub enum Layout {
     #[default]
     Qwerty,
+    /// Russian ЙЦУКЕН.
+    #[value(alias = "йцукен")]
+    Jcuken,
 }
 
 /// Each key lists the characters it produces; the first is its label.
@@ -27,6 +30,16 @@ const QWERTY: Rows = [
     &["zZ", "xX", "cC", "vV", "bB", "nN", "mM", ",<", ".>", "/?"],
 ];
 
+#[rustfmt::skip]
+const JCUKEN: Rows = [
+    &["ёЁ", "1!", "2\"", "3№", "4;", "5%", "6:", "7?", "8*", "9(", "0)", "-_",
+      "=+"],
+    &["йЙ", "цЦ", "уУ", "кК", "еЕ", "нН", "гГ", "шШ", "щЩ", "зЗ", "хХ", "ъЪ",
+      "\\/"],
+    &["фФ", "ыЫ", "вВ", "аА", "пП", "рР", "оО", "лЛ", "дД", "жЖ", "эЭ"],
+    &["яЯ", "чЧ", "сС", "мМ", "иИ", "тТ", "ьЬ", "бБ", "юЮ", ".,"],
+];
+
 /// How far right each row starts, mimicking the physical stagger.
 const STAGGER: [usize; 4] = [0, 2, 3, 4];
 
@@ -40,6 +53,7 @@ impl Layout {
     fn rows(self) -> &'static Rows {
         match self {
             Layout::Qwerty => &QWERTY,
+            Layout::Jcuken => &JCUKEN,
         }
     }
 
@@ -59,6 +73,17 @@ impl Layout {
         find(c)
             .or_else(|| lower.and_then(find))
             .or_else(|| base(c).and_then(find))
+    }
+
+    /// The layout that can place the most characters of `words`; QWERTY on
+    /// a tie.
+    pub fn detect(words: &[String]) -> Layout {
+        let placed = |layout: Layout| {
+            let chars = words.iter().flat_map(|w| w.chars());
+            chars.filter(|&c| layout.locate(c).is_some()).count()
+        };
+        let layouts = [Layout::Qwerty, Layout::Jcuken];
+        layouts.into_iter().rev().max_by_key(|&l| placed(l)).unwrap_or_default()
     }
 }
 
@@ -187,8 +212,8 @@ pub fn grid(layout: Layout, heat: &Heat, measure: Measure) -> Vec<String> {
 
 fn label(key: &str) -> char {
     let c = key.chars().next().unwrap_or(' ');
-    if c.is_ascii_lowercase() {
-        c.to_ascii_uppercase()
+    if c.is_lowercase() {
+        c.to_uppercase().next().unwrap_or(c)
     } else {
         c
     }
@@ -216,6 +241,36 @@ mod tests {
         assert_eq!(Layout::Qwerty.locate('Ê'), Layout::Qwerty.locate('e'));
         assert_eq!(Layout::Qwerty.locate('ç'), Layout::Qwerty.locate('c'));
         assert_eq!(Layout::Qwerty.locate('€'), None);
+    }
+
+    #[test]
+    fn cyrillic_lands_on_jcuken_keys() {
+        let ye = Some(Key::At { row: 1, col: 4 });
+        assert_eq!(Layout::Jcuken.locate('е'), ye);
+        assert_eq!(Layout::Jcuken.locate('Е'), ye);
+        assert_eq!(
+            Layout::Jcuken.locate('ё'),
+            Some(Key::At { row: 0, col: 0 })
+        );
+        assert_eq!(Layout::Jcuken.locate('.'), Layout::Jcuken.locate(','));
+        assert_eq!(Layout::Qwerty.locate('ж'), None);
+        assert_eq!(Layout::Jcuken.locate('q'), None);
+    }
+
+    #[test]
+    fn detect_picks_the_layout_that_fits_the_words() {
+        let words = |text: &str| crate::words::split(text);
+        assert_eq!(Layout::detect(&words("привет мир")), Layout::Jcuken);
+        assert_eq!(Layout::detect(&words("hello été")), Layout::Qwerty);
+        assert_eq!(Layout::detect(&words("123 -")), Layout::Qwerty, "tie");
+        assert_eq!(Layout::detect(&[]), Layout::Qwerty);
+    }
+
+    #[test]
+    fn jcuken_grid_labels_cyrillic_in_capitals() {
+        let heat = heat(Layout::Jcuken, &BTreeMap::new());
+        let lines = grid(Layout::Jcuken, &heat, Measure::Errors);
+        assert!(lines[2].starts_with("    Й  Ц  У  К  Е  Н"));
     }
 
     #[test]

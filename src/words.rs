@@ -3,9 +3,10 @@
 use fastrand::Rng;
 
 /// Bundled word lists, keyed by the name `--language` takes.
-pub const LANGUAGES: [(&str, &str); 2] = [
+pub const LANGUAGES: [(&str, &str); 3] = [
     ("english", include_str!("../resources/english.txt")),
     ("french", include_str!("../resources/french.txt")),
+    ("russian", include_str!("../resources/russian.txt")),
 ];
 
 pub fn language(name: &str) -> Option<Vec<String>> {

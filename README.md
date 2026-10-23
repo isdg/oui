@@ -18,6 +18,7 @@ cargo install --path .
 ```sh
 oui                       # 50 random English words
 oui -l french             # French words
+oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -t 60                 # a timed test of 60 seconds
 oui -w 20 notes.txt       # the first 20 words of a text, in order
 ```
@@ -25,10 +26,10 @@ oui -w 20 notes.txt       # the first 20 words of a text, in order
 | Flag | Meaning |
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
-| `-l, --language` | Bundled list: `english` (default) or `french`. |
+| `-l, --language` | Bundled list: `english` (default), `french`, `russian`. |
 | `-w, --words` | Words in the test: 50, or the whole file. |
 | `-t, --time` | Make it a timed test of this many seconds. |
-| `-k, --layout` | Heatmap layout: `qwerty`. |
+| `-k, --layout` | Heatmap layout: `qwerty` or `jcuken` (alias `йцукен`); detected from the words when omitted. |
 
 ## Keys
 

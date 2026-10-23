@@ -13,7 +13,7 @@ most time, and a drill that feeds those weak spots back to you.
   text file, results the moment the last word lands.
 - Diagnostics per key **and** per bigram, for both errors and speed.
 - A results screen in the plain-text style of `plc stat`: stepped box-drawing
-  line plot, a heatmap of tinted key tiles, aligned `Label : value` stats.
+  line plot, a heatmap of grey key tiles, aligned `Label : value` stats.
 - Pure, unit-tested logic: the session engine, statistics, plots and screens
   are free of IO; only `main.rs` touches the terminal.
 
@@ -86,8 +86,8 @@ Three bands, top to bottom, under a one-line header:
 - The plot is a port of `plc`'s `line_chart`: one column per sample, `●`
   start, `─ │ ╭ ╮ ╰ ╯` joins, a right-aligned label on every row, `┼ ┤ └`
   axis, eight rows tall. Samples are resampled to the available width.
-- The heatmap is one row of tiles per key row: each key's own label tinted by
-  level on a fixed five-step 256-colour ramp (`plc`'s fixed thresholds),
+- The heatmap is one row of tiles per key row: each key's own label shaded by
+  level on a five-step grey ramp, dark to white (`plc`'s fixed thresholds),
   untyped keys dimmed, a tiled legend. Without colour (`oui stats` piped)
   each label carries `plc`'s `· ░ ▒ ▓ █` shade instead.
 

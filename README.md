@@ -65,8 +65,8 @@ most missed and the three slowest over your last 20 tests of that language
   **Accuracy** counts corrected mistakes too.
 - The **plot** is WPM over a trailing five-second window, so slowdowns show
   instead of averaging away.
-- The **heatmap** tints each key by miss rate or by mean latency, green to
-  red; dim keys were never typed. Piped, `oui stats` shows `plc`'s
+- The **heatmap** shades each key's tile by miss rate or by mean latency, dark
+  grey (best) to white (worst); dim keys were never typed. Piped, `oui stats` shows `plc`'s
   `· ░ ▒ ▓ █` after each key instead.
 - **Error bigrams** are the target pairs whose second key you missed;
   **slow bigrams** the pairs with the longest gap between keys. `␣` marks a

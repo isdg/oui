@@ -195,10 +195,10 @@ fn ms(n: u64) -> Duration {
 /// `plc`'s shades, best to worst: the heatmap where colour is unavailable.
 pub const SHADES: [char; 5] = ['·', '░', '▒', '▓', '█'];
 
-/// Tile colours, best to worst, as 256-colour (background, foreground)
-/// pairs; each foreground is picked to keep the label readable.
+/// Tile greys, best to worst, as 256-colour (background, foreground) pairs:
+/// dark to white like `·` to `█`, the label white or black to stay readable.
 pub const TINTS: [(u8, u8); 5] =
-    [(22, 255), (58, 255), (136, 16), (166, 16), (160, 255)];
+    [(236, 252), (240, 255), (245, 16), (250, 16), (255, 16)];
 
 /// A key as drawn: its padded label and the level it is tinted by.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,7 +415,7 @@ mod tests {
         let keys = BTreeMap::from([('q', tally(0, 1))]);
         let heat = heat(Layout::Qwerty, &keys);
         let lines = ansi(&tiles(Layout::Qwerty, &heat, Measure::Errors));
-        assert!(lines[1].starts_with("  \x1b[48;5;160;38;5;255m Q \x1b[0m"));
+        assert!(lines[1].starts_with("  \x1b[48;5;255;38;5;16m Q \x1b[0m"));
         assert!(lines[1].contains("\x1b[2m W \x1b[0m"));
     }
 

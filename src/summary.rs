@@ -193,7 +193,7 @@ mod tests {
         assert!(out.contains("· clean   ░ <5%"));
         assert!(!out.contains('\x1b'), "no ANSI unless asked");
         assert!(render(&records, Layout::Qwerty, true)
-            .contains("\x1b[48;5;22;38;5;255m A \x1b[0m"));
+            .contains("\x1b[48;5;236;38;5;252m A \x1b[0m"));
     }
 
     #[test]

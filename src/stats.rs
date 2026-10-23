@@ -188,6 +188,41 @@ impl Report {
     }
 }
 
+/// Several reports as one: counts and tallies summed, speeds averaged per
+/// report, accuracy over all keystrokes. The timeline is left empty.
+pub fn combine<'a>(reports: impl IntoIterator<Item = &'a Report>) -> Report {
+    let mut total = Report::default();
+    let mut n = 0.0;
+    for r in reports {
+        n += 1.0;
+        total.elapsed += r.elapsed;
+        total.wpm += r.wpm;
+        total.raw_wpm += r.raw_wpm;
+        total.hits += r.hits;
+        total.keystrokes += r.keystrokes;
+        total.words += r.words;
+        total.correct_words += r.correct_words;
+        for (&c, &t) in &r.keys {
+            *total.keys.entry(c).or_default() += t;
+        }
+        for (&b, &t) in &r.bigrams {
+            *total.bigrams.entry(b).or_default() += t;
+        }
+        for (&p, &count) in &r.typos {
+            *total.typos.entry(p).or_default() += count;
+        }
+    }
+    if n > 0.0 {
+        total.wpm /= n;
+        total.raw_wpm /= n;
+    }
+    total.accuracy = match total.keystrokes {
+        0 => 1.0,
+        k => total.hits as f64 / k as f64,
+    };
+    total
+}
+
 pub fn wpm(chars: usize, elapsed: Duration) -> f64 {
     let minutes = elapsed.as_secs_f64() / 60.0;
     if minutes == 0.0 {
@@ -315,6 +350,19 @@ mod tests {
         let keys = [('a', 0), ('b', 100), ('a', 400), ('b', 500), ('c', 1500)];
         let r = play(&["ababc"], &keys);
         assert_eq!(r.slow_bigrams(5), [(('a', 'b'), MS * 100)]);
+    }
+
+    #[test]
+    fn combine_sums_tallies_and_averages_speed() {
+        let a = play(&["ab"], &steady("ab", 100));
+        let b = play(&["ab"], &[('a', 0), ('x', 100), ('<', 150), ('b', 200)]);
+        let all = combine([&a, &b]);
+        assert_eq!(all.wpm, (a.wpm + b.wpm) / 2.0);
+        assert_eq!((all.hits, all.keystrokes), (4, 5));
+        assert_eq!(all.accuracy, 0.8);
+        assert_eq!((all.keys[&'b'].hits, all.keys[&'b'].misses), (2, 1));
+        assert_eq!(all.typos[&('b', 'x')], 1);
+        assert_eq!(combine([]).accuracy, 1.0);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -17,6 +17,7 @@ use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
 use oui::stats::Report;
+use oui::summary;
 use oui::ui;
 use oui::words::{self, Source};
 
@@ -31,8 +32,32 @@ const DRILL: usize = 3;
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
-#[command(name = "oui", version, about)]
+#[command(name = "oui", version, about, args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+    #[command(flatten)]
+    test: TestArgs,
+}
+
+#[derive(Subcommand, Debug, PartialEq, Eq)]
+enum Cmd {
+    /// Summarise the recorded tests: speed over time, heatmaps, rankings.
+    Stats {
+        /// Only the most recent N tests.
+        #[arg(short = 'n', long)]
+        last: Option<NonZeroUsize>,
+        /// Only tests of this language or file name.
+        #[arg(short, long)]
+        source: Option<String>,
+        /// Heatmap layout; detected from the recorded words by default.
+        #[arg(short = 'k', long, value_enum)]
+        layout: Option<Layout>,
+    },
+}
+
+#[derive(Args, Debug)]
+struct TestArgs {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
     /// Bundled word list to draw from: english, french or russian.
@@ -243,11 +268,64 @@ fn save(
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let app = App::new(setup(&cli)?, Some(Store::open()?));
-    ratatui::run(|terminal| run(terminal, app))
+    let store = Store::open()?;
+    match cli.cmd {
+        Some(Cmd::Stats { last, source, layout }) => {
+            stats(&store, last, source.as_deref(), layout)
+        }
+        None => {
+            let app = App::new(setup(&cli.test)?, Some(store));
+            ratatui::run(|terminal| run(terminal, app))
+        }
+    }
 }
 
-fn setup(cli: &Cli) -> Result<Setup> {
+fn stats(
+    store: &Store,
+    last: Option<NonZeroUsize>,
+    source: Option<&str>,
+    layout: Option<Layout>,
+) -> Result<()> {
+    let history = store.load()?;
+    if history.skipped > 0 {
+        let path = store.history();
+        eprintln!(
+            "oui: skipped {} unreadable lines in {}",
+            history.skipped,
+            path.display()
+        );
+    }
+    let records = select(history.records, last, source);
+    if records.is_empty() {
+        println!("no tests recorded in {}", store.history().display());
+        return Ok(());
+    }
+    let layout = layout.unwrap_or_else(|| {
+        let words: Vec<String> =
+            records.iter().flat_map(|r| r.words.iter().cloned()).collect();
+        Layout::detect(&words)
+    });
+    print!("{}", summary::render(&records, layout));
+    Ok(())
+}
+
+/// The records of `source` (all if `None`), the last `last` of them.
+fn select(
+    records: Vec<Record>,
+    last: Option<NonZeroUsize>,
+    source: Option<&str>,
+) -> Vec<Record> {
+    let mut records: Vec<Record> = records
+        .into_iter()
+        .filter(|r| source.is_none_or(|s| r.meta.source == s))
+        .collect();
+    if let Some(n) = last {
+        records.drain(..records.len().saturating_sub(n.get()));
+    }
+    records
+}
+
+fn setup(cli: &TestArgs) -> Result<Setup> {
     let (source, name) = source(cli)?;
     let limit = limit(cli, &source);
     let title = match limit {
@@ -284,7 +362,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
 }
 
 /// The words to type and a name for them.
-fn source(cli: &Cli) -> Result<(Source, String)> {
+fn source(cli: &TestArgs) -> Result<(Source, String)> {
     if let Some(path) = &cli.file {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -307,7 +385,7 @@ fn source(cli: &Cli) -> Result<(Source, String)> {
     Ok((Source::Random(words), cli.language.clone()))
 }
 
-fn limit(cli: &Cli, source: &Source) -> Limit {
+fn limit(cli: &TestArgs, source: &Source) -> Limit {
     if let Some(secs) = cli.time {
         return Limit::Time(Duration::from_secs(secs.get()));
     }
@@ -322,8 +400,8 @@ fn limit(cli: &Cli, source: &Source) -> Limit {
 mod tests {
     use super::*;
 
-    fn cli(args: &[&str]) -> Cli {
-        Cli::try_parse_from([&["oui"][..], args].concat()).unwrap()
+    fn cli(args: &[&str]) -> TestArgs {
+        Cli::try_parse_from([&["oui"][..], args].concat()).unwrap().test
     }
 
     fn press(app: &mut App, code: KeyCode) -> bool {
@@ -398,7 +476,47 @@ mod tests {
         assert!(parse(&["notes.txt", "-l", "french"]).is_err());
         assert!(parse(&["-k", "qwerty", "-l", "french"]).is_ok());
         assert!(parse(&["-k", "йцукен"])
-            .is_ok_and(|c| c.layout == Some(Layout::Jcuken)));
+            .is_ok_and(|c| c.test.layout == Some(Layout::Jcuken)));
+    }
+
+    #[test]
+    fn stats_is_a_subcommand_that_takes_no_test_flags() {
+        let parse =
+            |args: &[&str]| Cli::try_parse_from([&["oui"][..], args].concat());
+        let cmd = parse(&["stats", "-n", "5", "-s", "russian"]).unwrap().cmd;
+        assert_eq!(
+            cmd,
+            Some(Cmd::Stats {
+                last: NonZeroUsize::new(5),
+                source: Some("russian".into()),
+                layout: None,
+            })
+        );
+        assert!(parse(&["stats", "-w", "10"]).is_err());
+        assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
+    }
+
+    #[test]
+    fn select_filters_by_source_then_keeps_the_last() {
+        let record = |source: &str, at: &str| {
+            let s = Session::new(vec!["a".into()], None);
+            let meta = Meta { source: source.into(), ..Meta::default() };
+            Record::new(&s, Instant::now(), at.into(), meta)
+        };
+        let all = vec![
+            record("english", "1"),
+            record("russian", "2"),
+            record("russian", "3"),
+            record("russian", "4"),
+        ];
+        let at =
+            |rs: Vec<Record>| rs.into_iter().map(|r| r.at).collect::<Vec<_>>();
+        assert_eq!(
+            at(select(all.clone(), NonZeroUsize::new(2), Some("russian"))),
+            ["3", "4"]
+        );
+        assert_eq!(at(select(all.clone(), None, Some("english"))), ["1"]);
+        assert_eq!(select(all, NonZeroUsize::new(9), None).len(), 4);
     }
 
     #[test]

@@ -105,7 +105,11 @@ fn wpm_plot(r: &Report, width: u16) -> Vec<String> {
     out
 }
 
-fn keyboard_lines(r: &Report, layout: Layout, measure: Measure) -> Vec<String> {
+pub fn keyboard_lines(
+    r: &Report,
+    layout: Layout,
+    measure: Measure,
+) -> Vec<String> {
     let heat = keyboard::heat(layout, &r.keys);
     let title = format!("  keyboard — {}", measure.name());
     let mut out = vec![title, String::new()];
@@ -119,7 +123,7 @@ fn keyboard_lines(r: &Report, layout: Layout, measure: Measure) -> Vec<String> {
     out
 }
 
-fn worst_keys(r: &Report) -> Vec<String> {
+pub fn worst_keys(r: &Report) -> Vec<String> {
     let keys = r.worst_keys(TOP).into_iter().map(|(c, t)| {
         let rate = t.miss_rate() * 100.0;
         format!(" {}   {rate:>3.0}%  {}/{}", show(c), t.misses, t.attempts())
@@ -127,7 +131,7 @@ fn worst_keys(r: &Report) -> Vec<String> {
     ranking("Worst keys", keys)
 }
 
-fn top_typos(r: &Report) -> Vec<String> {
+pub fn top_typos(r: &Report) -> Vec<String> {
     let typos = r
         .top_typos(TOP)
         .into_iter()
@@ -135,14 +139,14 @@ fn top_typos(r: &Report) -> Vec<String> {
     ranking("Typos", typos)
 }
 
-fn error_bigrams(r: &Report) -> Vec<String> {
+pub fn error_bigrams(r: &Report) -> Vec<String> {
     let bigrams = r.error_bigrams(TOP).into_iter().map(|((a, b), t)| {
         format!(" {}{}   {}/{}", show(a), show(b), t.misses, t.attempts())
     });
     ranking("Error bigrams", bigrams)
 }
 
-fn slow_bigrams(r: &Report) -> Vec<String> {
+pub fn slow_bigrams(r: &Report) -> Vec<String> {
     let bigrams = r.slow_bigrams(TOP).into_iter().map(|((a, b), d)| {
         format!(" {}{}   {} ms", show(a), show(b), d.as_millis())
     });
@@ -159,7 +163,7 @@ fn ranking(title: &str, entries: impl Iterator<Item = String>) -> Vec<String> {
 }
 
 /// A `── Title ───` section rule, `width` columns wide.
-fn rule(title: &str, width: usize) -> String {
+pub fn rule(title: &str, width: usize) -> String {
     let head = format!("── {title} ");
     let fill = width.saturating_sub(head.chars().count());
     format!("{head}{}", "─".repeat(fill))

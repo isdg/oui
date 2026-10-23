@@ -5,5 +5,6 @@ pub mod keyboard;
 pub mod plot;
 pub mod session;
 pub mod stats;
+pub mod summary;
 pub mod ui;
 pub mod words;

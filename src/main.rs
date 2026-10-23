@@ -7,13 +7,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use oui::config::Config;
 use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
@@ -21,8 +22,9 @@ use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary;
 use oui::ui;
-use oui::words::{self, Source};
+use oui::words::{self, Mode, Source};
 
+const DEFAULT_LANGUAGE: &str = "english";
 /// Words in a test when neither `--words` nor a file says otherwise.
 const DEFAULT_WORDS: usize = 50;
 /// Words a timed test starts with, and tops up by when running low.
@@ -34,9 +36,28 @@ const DRILL: usize = 3;
 /// Tests of the same source a drill looks back over, this one included.
 const RECENT: usize = 20;
 
+const FILES_HELP: &str = "\
+Files (under $OUI_HOME, default ~/.oui):
+  config                 defaults for any flag above, one `key = value` a
+                         line; flags override them:
+                           language = russian
+                           mode     = words        # or text
+                           with     = punctuation, numbers
+                           words    = 50           # or time = 60
+                           layout   = auto         # or qwerty, jcuken
+  history.jsonl          every test, keystrokes included; read by `oui stats`
+  texts/<language>/*.txt your own passages for --mode text, blank-line
+                         separated";
+
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
-#[command(name = "oui", version, about, args_conflicts_with_subcommands = true)]
+#[command(
+    name = "oui",
+    version,
+    about,
+    args_conflicts_with_subcommands = true,
+    after_help = FILES_HELP
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -60,14 +81,15 @@ enum Cmd {
     },
 }
 
-#[derive(Args, Debug)]
+/// What a test is; each flag can be defaulted in ~/.oui/config.
+#[derive(Args, Debug, Clone, Default)]
 struct TestArgs {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
-    /// Language to type: english, french or russian, or any with texts in
-    /// ~/.oui/texts/<language>/ for --mode text.
-    #[arg(short, long, default_value = "english", conflicts_with = "file")]
-    language: String,
+    /// Language to type: english (default), french or russian, or any with
+    /// texts in ~/.oui/texts/<language>/ for --mode text.
+    #[arg(short, long, conflicts_with = "file")]
+    language: Option<String>,
     /// Random words (default), or passages of real prose.
     #[arg(short, long, value_enum, conflicts_with = "file")]
     mode: Option<Mode>,
@@ -91,14 +113,6 @@ struct TestArgs {
     /// default, so Russian text gets ЙЦУКЕН.
     #[arg(short = 'k', long, value_enum)]
     layout: Option<Layout>,
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    /// Random words from the language's list.
-    Words,
-    /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
-    Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,8 +358,10 @@ fn main() -> Result<()> {
             stats(&store, last, source.as_deref(), layout)
         }
         None => {
+            let config = Config::load(&store.dir().join("config"))?;
+            let args = merge(&cli.test, &config);
             let texts = store.dir().join("texts");
-            let app = App::new(setup(&cli.test, &texts)?, Some(store));
+            let app = App::new(setup(&args, &texts)?, Some(store));
             ratatui::run(|terminal| run(terminal, app))
         }
     }
@@ -395,6 +411,42 @@ fn select(
         records.drain(..records.len().saturating_sub(n.get()));
     }
     records
+}
+
+/// The flags given, with the config filling in the rest. A FILE takes no
+/// language, mode or extras from the config, nor does text mode extras.
+fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
+    fn pick<T>(
+        flag: Option<T>,
+        set: Option<T>,
+        from_config: bool,
+    ) -> Option<T> {
+        flag.or(set.filter(|_| from_config))
+    }
+    let from_config = cli.file.is_none();
+    let mode = pick(cli.mode, config.mode, from_config);
+    let with = match cli.with.is_empty() {
+        false => cli.with.clone(),
+        true if from_config && mode != Some(Mode::Text) => config.with.clone(),
+        true => Vec::new(),
+    };
+    let (words, time) = match cli.words.is_some() || cli.time.is_some() {
+        true => (cli.words, cli.time),
+        false => (config.words, config.time),
+    };
+    TestArgs {
+        file: cli.file.clone(),
+        language: pick(
+            cli.language.clone(),
+            config.language.clone(),
+            from_config,
+        ),
+        mode,
+        with,
+        words,
+        time,
+        layout: cli.layout.or(config.layout),
+    }
 }
 
 /// The run's settings; `texts` is the directory of the user's own passages.
@@ -461,7 +513,8 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
         let name = path.file_name().unwrap_or(path.as_os_str());
         return Ok((Source::Text(words), name.to_string_lossy().into_owned()));
     }
-    let language = cli.language.clone();
+    let language =
+        cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
     if cli.mode == Some(Mode::Text) {
         let passages = words::load_passages(&language, texts)?;
         if passages.is_empty() {
@@ -473,16 +526,12 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
         }
         return Ok((Source::passages(passages), language));
     }
-    let Some(words) = words::language(&cli.language) else {
+    let Some(words) = words::language(&language) else {
         let known: Vec<&str> =
             words::LANGUAGES.iter().map(|(n, _)| *n).collect();
-        bail!(
-            "unknown language '{}' (have {})",
-            cli.language,
-            known.join(", ")
-        );
+        bail!("unknown language '{language}' (have {})", known.join(", "));
     };
-    Ok((Source::Random(words), cli.language.clone()))
+    Ok((Source::Random(words), language))
 }
 
 fn limit(cli: &TestArgs, source: &Source) -> Limit {
@@ -622,6 +671,54 @@ mod tests {
         assert!(
             Cli::try_parse_from(["oui", "notes.txt", "-m", "text"]).is_err()
         );
+    }
+
+    #[test]
+    fn config_fills_in_what_flags_leave_out() {
+        let config = oui::config::parse(
+            "language = russian\nmode = words\nwith = p\ntime = 60\nlayout = jcuken",
+        )
+        .unwrap();
+        let args = merge(&cli(&[]), &config);
+        assert_eq!(args.language.as_deref(), Some("russian"));
+        assert_eq!(args.with, [Extra::Punctuation]);
+        assert_eq!((args.words, args.time), (None, NonZeroU64::new(60)));
+        assert_eq!(args.layout, Some(Layout::Jcuken));
+
+        let args =
+            merge(&cli(&["-l", "french", "-w", "10", "-W", "n"]), &config);
+        assert_eq!(args.language.as_deref(), Some("french"), "flags win");
+        assert_eq!((args.words, args.time), (NonZeroUsize::new(10), None));
+        assert_eq!(args.with, [Extra::Numbers]);
+    }
+
+    #[test]
+    fn a_file_or_text_mode_takes_no_extras_from_config() {
+        let config =
+            oui::config::parse("language = russian\nwith = p").unwrap();
+        let file = merge(&cli(&["notes.txt"]), &config);
+        assert_eq!((file.language, file.with), (None, vec![]));
+        let text = merge(&cli(&["-m", "text"]), &config);
+        assert!(text.with.is_empty());
+        assert!(
+            setup(&text, &no_texts()).is_ok(),
+            "config extras are no error"
+        );
+        let config = oui::config::parse("mode = text").unwrap();
+        assert!(
+            merge(&cli(&["-W", "p"]), &config).with == [Extra::Punctuation]
+        );
+    }
+
+    #[test]
+    fn help_documents_the_config_and_files() {
+        use clap::CommandFactory;
+        let help = Cli::command().render_long_help().to_string();
+        for needle in
+            ["config", "history.jsonl", "texts/<language>/", "with     ="]
+        {
+            assert!(help.contains(needle), "help lacks {needle:?}\n{help}");
+        }
     }
 
     #[test]

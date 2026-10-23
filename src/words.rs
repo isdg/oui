@@ -5,7 +5,16 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use fastrand::Rng;
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Random words from the language's list.
+    Words,
+    /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
+    Text,
+}
 
 /// Bundled word lists, keyed by the name `--language` takes.
 pub const LANGUAGES: [(&str, &str); 3] = [

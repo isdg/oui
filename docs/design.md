@@ -164,11 +164,13 @@ random words, or the whole text for a file; `-t` switches to a timed test.
 
 A stack of small PRs, each building and tested on its own:
 
-1. `feat/core/session` — crate scaffold, word sources, session engine.
-2. `feat/core/stats` — the `Report` and its rankings.
-3. `feat/ui/plots` — line chart and keyboard heatmap.
-4. `feat/ui/results` — the results screen.
-5. `feat/ui/typing` — typing screen, CLI and event loop; first usable build.
-6. `feat/core/practice` — weak-bigram drill.
+1. `feat/core/words` — crate scaffold and word sources.
+2. `feat/core/session` — the typing engine and keystroke log.
+3. `feat/core/stats` — the `Report` and its rankings.
+4. `feat/ui/plots` — line chart and keyboard heatmap.
+5. `feat/ui/results` — the results screen.
+6. `feat/ui/typing` — the typing screen.
+7. `feat/app/cli` — CLI and event loop; first usable build.
+8. `feat/core/practice` — weak-bigram drill.
 
 Later: run history with trends, Mac AZERTY and other layouts, a config file.

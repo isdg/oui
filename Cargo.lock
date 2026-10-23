@@ -858,6 +858,7 @@ dependencies = [
 name = "oui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "fastrand",
  "ratatui",

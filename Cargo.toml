@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "terminal typing test that finds the keys and bigrams slowing you"
 
+[[bin]]
+name = "oui"
+path = "src/main.rs"
+
 [dependencies]
+anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 fastrand = "2"
 ratatui = "0.30"

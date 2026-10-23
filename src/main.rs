@@ -17,7 +17,7 @@ use ratatui::{DefaultTerminal, Frame};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
-use oui::stats::Report;
+use oui::stats::{self, Report};
 use oui::summary;
 use oui::ui;
 use oui::words::{self, Source};
@@ -30,6 +30,8 @@ const BATCH: usize = 100;
 const FRAME: Duration = Duration::from_millis(100);
 /// Bigrams a drill takes from each of the error and slowness rankings.
 const DRILL: usize = 3;
+/// Tests of the same source a drill looks back over, this one included.
+const RECENT: usize = 20;
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
@@ -128,12 +130,19 @@ struct App {
     store: Option<Store>,
     /// Shown on the results screen, e.g. when a record could not be saved.
     notice: Option<String>,
+    /// The last [`RECENT`] tests of this source, which drills draw on.
+    recent: Vec<Report>,
     screen: Screen,
 }
 
 impl App {
     fn new(setup: Setup, store: Option<Store>) -> Self {
         let Setup { source, limit, layout, title, meta } = setup;
+        let (recent, notice) = match store.as_ref().map(|s| recent(s, &meta)) {
+            Some(Err(e)) => (Vec::new(), Some(format!("history: {e:#}"))),
+            Some(Ok(recent)) => (recent, None),
+            None => (Vec::new(), None),
+        };
         let mut app = App {
             feed: Feed { source, drill: Vec::new(), drawn: 0, rng: Rng::new() },
             limit,
@@ -141,7 +150,8 @@ impl App {
             title,
             meta,
             store,
-            notice: None,
+            notice,
+            recent,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
         };
         app.restart();
@@ -180,6 +190,11 @@ impl App {
             let saved = save(self.store.as_ref(), session, now, &self.meta);
             self.notice = saved.err().map(|e| format!("not saved: {e:#}"));
             let report = Report::new(session, session.elapsed(now));
+            if !session.log().is_empty() {
+                self.recent.push(report.clone());
+                let excess = self.recent.len().saturating_sub(RECENT);
+                self.recent.drain(..excess);
+            }
             self.screen =
                 Screen::Results { report, measure: Measure::default() };
         }
@@ -217,14 +232,15 @@ impl App {
                 }
                 self.tick(now);
             }
-            Screen::Results { report, measure } => match key.code {
+            Screen::Results { measure, .. } => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return false,
                 KeyCode::Char('r') => {
                     self.feed.drill.clear();
                     self.restart();
                 }
                 KeyCode::Char('p') => {
-                    self.feed.drill = report.weak_bigrams(DRILL);
+                    let recent = stats::combine(&self.recent);
+                    self.feed.drill = recent.weak_bigrams(DRILL);
                     self.restart();
                 }
                 KeyCode::Tab => *measure = measure.toggle(),
@@ -249,6 +265,15 @@ impl App {
             }
         }
     }
+}
+
+/// Reports of the last [`RECENT`] recorded tests of the same source.
+fn recent(store: &Store, meta: &Meta) -> Result<Vec<Report>> {
+    let records = store.load()?.records;
+    let same = records.iter().filter(|r| r.meta.source == meta.source);
+    let mut reports: Vec<Report> = same.map(Record::report).collect();
+    reports.drain(..reports.len().saturating_sub(RECENT - 1));
+    Ok(reports)
 }
 
 /// Records a finished session, unless nothing was typed.
@@ -634,6 +659,37 @@ mod tests {
             .as_deref()
             .is_some_and(|n| n.starts_with("not saved")));
         let _ = fs::remove_file(&tmp.0);
+    }
+
+    #[test]
+    fn drills_draw_on_earlier_tests_of_the_same_source() {
+        let tmp = TempDir::new("recent");
+        let store = Store::at(&tmp.0);
+        let meta =
+            |source: &str| Meta { source: source.into(), ..Meta::default() };
+        // An earlier test that missed the d of "cd".
+        let mut past = Session::new(vec!["cd".into()], None);
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        past.apply(Input::Char('c'), ms(0));
+        past.apply(Input::Char('x'), ms(100));
+        past.apply(Input::Backspace, ms(200));
+        past.apply(Input::Char('d'), ms(300));
+        for source in ["t", "other"] {
+            store
+                .append(&Record::new(&past, t0, String::new(), meta(source)))
+                .unwrap();
+        }
+        let mut setup = test_setup(words("ab cd"), Limit::Words(2));
+        setup.meta = meta("t");
+        let mut app = App::new(setup, Some(store));
+        assert_eq!(app.recent.len(), 1, "only the same source");
+        for c in "ab cd".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert_eq!(app.recent.len(), 2);
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.feed.drill, [('c', 'd')]);
     }
 
     #[test]

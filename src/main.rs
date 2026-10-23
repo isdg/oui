@@ -13,6 +13,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
 use oui::stats::Report;
@@ -82,26 +83,39 @@ impl Feed {
     }
 }
 
+/// A run's settings, resolved from the command line.
+struct Setup {
+    source: Source,
+    limit: Limit,
+    layout: Layout,
+    title: String,
+    meta: Meta,
+}
+
 struct App {
     feed: Feed,
     limit: Limit,
     layout: Layout,
     title: String,
+    meta: Meta,
+    /// Where finished tests are recorded; `None` records nothing.
+    store: Option<Store>,
+    /// Shown on the results screen, e.g. when a record could not be saved.
+    notice: Option<String>,
     screen: Screen,
 }
 
 impl App {
-    fn new(
-        source: Source,
-        limit: Limit,
-        layout: Layout,
-        title: String,
-    ) -> Self {
+    fn new(setup: Setup, store: Option<Store>) -> Self {
+        let Setup { source, limit, layout, title, meta } = setup;
         let mut app = App {
             feed: Feed { source, drill: Vec::new(), drawn: 0, rng: Rng::new() },
             limit,
             layout,
             title,
+            meta,
+            store,
+            notice: None,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
         };
         app.restart();
@@ -137,6 +151,8 @@ impl App {
             session.extend(self.feed.take(BATCH));
         }
         if session.finished() {
+            let saved = save(self.store.as_ref(), session, now, &self.meta);
+            self.notice = saved.err().map(|e| format!("not saved: {e:#}"));
             let report = Report::new(session, session.elapsed(now));
             self.screen =
                 Screen::Results { report, measure: Measure::default() };
@@ -199,23 +215,57 @@ impl App {
                 ui::typing::draw(frame, session, now, &title)
             }
             Screen::Results { report, measure } => {
-                ui::results::draw(frame, report, self.layout, *measure, &title)
+                let notice = self.notice.as_deref();
+                let (layout, measure) = (self.layout, *measure);
+                ui::results::draw(
+                    frame, report, layout, measure, &title, notice,
+                )
             }
         }
     }
 }
 
+/// Records a finished session, unless nothing was typed.
+fn save(
+    store: Option<&Store>,
+    session: &Session,
+    now: Instant,
+    meta: &Meta,
+) -> Result<()> {
+    let Some(store) = store else { return Ok(()) };
+    if session.log().is_empty() {
+        return Ok(());
+    }
+    let at = chrono::Local::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    store.append(&Record::new(session, now, at, meta.clone()))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let (source, name) = source(&cli)?;
-    let limit = limit(&cli, &source);
+    let app = App::new(setup(&cli)?, Some(Store::open()?));
+    ratatui::run(|terminal| run(terminal, app))
+}
+
+fn setup(cli: &Cli) -> Result<Setup> {
+    let (source, name) = source(cli)?;
+    let limit = limit(cli, &source);
     let title = match limit {
         Limit::Words(n) => format!("{name} · {n} words"),
         Limit::Time(d) => format!("{name} · {}s", d.as_secs()),
     };
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
-    let app = App::new(source, limit, layout, title);
-    ratatui::run(|terminal| run(terminal, app))
+    let mode = match source {
+        Source::Random(_) => "words",
+        Source::Text(_) => "file",
+    };
+    let meta = Meta {
+        source: name,
+        mode: mode.to_string(),
+        with: Vec::new(),
+        layout: layout.name().to_string(),
+    };
+    Ok(Setup { source, limit, layout, title, meta })
 }
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
@@ -284,6 +334,39 @@ mod tests {
         Source::Text(words::split(text))
     }
 
+    fn app(text: &str, limit: Limit) -> App {
+        App::new(test_setup(words(text), limit), None)
+    }
+
+    fn test_setup(source: Source, limit: Limit) -> Setup {
+        let layout = Layout::Qwerty;
+        Setup {
+            source,
+            limit,
+            layout,
+            title: "t".into(),
+            meta: Meta::default(),
+        }
+    }
+
+    /// A scratch directory removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("oui-main-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn defaults_to_fifty_english_words() {
         let cli = cli(&[]);
@@ -329,12 +412,7 @@ mod tests {
 
     #[test]
     fn finishing_the_text_shows_results() {
-        let mut app = App::new(
-            words("ab cd"),
-            Limit::Words(2),
-            Layout::Qwerty,
-            "t".into(),
-        );
+        let mut app = app("ab cd", Limit::Words(2));
         for c in "ab cd".chars() {
             assert!(press(&mut app, KeyCode::Char(c)));
         }
@@ -348,9 +426,7 @@ mod tests {
 
     #[test]
     fn escape_quits_before_typing_and_ends_the_test_after() {
-        let new = || {
-            App::new(words("ab"), Limit::Words(1), Layout::Qwerty, "t".into())
-        };
+        let new = || app("ab", Limit::Words(1));
         assert!(!press(&mut new(), KeyCode::Esc));
         let mut app = new();
         press(&mut app, KeyCode::Char('a'));
@@ -361,9 +437,7 @@ mod tests {
 
     #[test]
     fn timed_tests_top_up_words_and_texts_continue() {
-        let text = words("a b c");
-        let limit = Limit::Time(Duration::from_secs(60));
-        let mut app = App::new(text, limit, Layout::Qwerty, "t".into());
+        let mut app = app("a b c", Limit::Time(Duration::from_secs(60)));
         let Screen::Typing(session) = &app.screen else { unreachable!() };
         assert_eq!(session.words().len(), BATCH);
         assert_eq!(session.words()[..4], ["a", "b", "c", "a"]);
@@ -382,9 +456,7 @@ mod tests {
 
     #[test]
     fn drill_feeds_back_the_weak_bigrams_until_a_new_test() {
-        let text = words("ab cd");
-        let mut app =
-            App::new(text, Limit::Words(2), Layout::Qwerty, "t".into());
+        let mut app = app("ab cd", Limit::Words(2));
         for code in [
             KeyCode::Char('a'),
             KeyCode::Char('x'),
@@ -410,9 +482,43 @@ mod tests {
     }
 
     #[test]
+    fn each_test_with_keystrokes_is_recorded() {
+        let tmp = TempDir::new("record");
+        let store = Store::at(&tmp.0);
+        let setup = test_setup(words("ab"), Limit::Words(1));
+        let mut app = App::new(setup, Some(store.clone()));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('r'));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('r'));
+        press(&mut app, KeyCode::Tab);
+        let records = store.load().unwrap().records;
+        let completed: Vec<bool> =
+            records.iter().map(|r| r.completed).collect();
+        assert_eq!(completed, [true, false]);
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn a_failed_save_is_shown_not_fatal() {
+        let tmp = TempDir::new("blocked");
+        fs::write(&tmp.0, "a file, not a dir").unwrap();
+        let setup = test_setup(words("a"), Limit::Words(1));
+        let mut app = App::new(setup, Some(Store::at(&tmp.0)));
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.screen, Screen::Results { .. }));
+        assert!(app
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.starts_with("not saved")));
+        let _ = fs::remove_file(&tmp.0);
+    }
+
+    #[test]
     fn tab_toggles_the_heatmap_measure() {
-        let mut app =
-            App::new(words("a"), Limit::Words(1), Layout::Qwerty, "t".into());
+        let mut app = app("a", Limit::Words(1));
         press(&mut app, KeyCode::Char('a'));
         press(&mut app, KeyCode::Tab);
         let Screen::Results { measure, .. } = app.screen else {

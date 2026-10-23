@@ -23,6 +23,7 @@ pub fn draw(
     layout: Layout,
     measure: Measure,
     title: &str,
+    notice: Option<&str>,
 ) {
     use Constraint::{Fill, Length};
 
@@ -63,6 +64,10 @@ pub fn draw(
     }
     let keys = " r new test · p drill weak bigrams · tab errors/speed · q quit";
     frame.render_widget(Line::from(keys).dim(), footer);
+    if let Some(notice) = notice {
+        let notice = Line::from(format!("{notice} ")).red().right_aligned();
+        frame.render_widget(notice, footer);
+    }
 }
 
 fn summary(r: &Report) -> Vec<String> {
@@ -224,7 +229,7 @@ mod tests {
     #[test]
     fn screen_shows_every_section() {
         let rows = render(100, 30, |f| {
-            draw(f, &report(), Layout::Qwerty, Measure::Speed, "english")
+            draw(f, &report(), Layout::Qwerty, Measure::Speed, "english", None)
         });
         let screen = rows.join("\n");
         for needle in [

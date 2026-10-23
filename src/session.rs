@@ -91,6 +91,11 @@ impl Session {
         self.end.is_some()
     }
 
+    /// Ended by running out of words or time rather than cut short.
+    pub fn completed(&self) -> bool {
+        self.remaining() == 0 || self.limit.is_some_and(|l| self.end == Some(l))
+    }
+
     /// Words not yet submitted, the current one included.
     pub fn remaining(&self) -> usize {
         self.words.len() - self.typed.len()
@@ -325,6 +330,22 @@ mod tests {
         assert!(s.finished());
         assert_eq!(s.log().len(), 1);
         assert_eq!(s.elapsed(t0 + Duration::from_secs(5)), MS * 1000);
+    }
+
+    #[test]
+    fn completed_tells_a_full_run_from_a_cut_short_one() {
+        let mut s = session(&["a", "b"]);
+        let t0 = Instant::now();
+        type_keys(&mut s, t0, "a");
+        s.finish(t0 + MS * 100);
+        assert!(s.finished() && !s.completed());
+        let mut timed = Session::new(vec!["a".into(); 3], Some(MS * 500));
+        timed.apply(Input::Char('a'), t0);
+        timed.tick(t0 + MS * 600);
+        assert!(timed.completed());
+        let mut s = session(&["a"]);
+        type_keys(&mut s, t0, "a");
+        assert!(s.completed());
     }
 
     #[test]

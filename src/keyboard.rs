@@ -57,6 +57,13 @@ impl Layout {
         }
     }
 
+    pub fn name(self) -> &'static str {
+        match self {
+            Layout::Qwerty => "qwerty",
+            Layout::Jcuken => "jcuken",
+        }
+    }
+
     /// The key that types `c`, falling back to its lowercase form and then to
     /// its unaccented letter, so `Ê` lands on `e` where there is no `ê` key.
     pub fn locate(self, c: char) -> Option<Key> {

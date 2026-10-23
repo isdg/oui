@@ -13,11 +13,11 @@ most time, and a drill that feeds those weak spots back to you.
   text file, results the moment the last word lands.
 - Diagnostics per key **and** per bigram, for both errors and speed.
 - A results screen in the plain-text style of `plc stat`: stepped box-drawing
-  line plot, `· ░ ▒ ▓ █` shade heatmap, aligned `Label : value` stats.
+  line plot, a heatmap of tinted key tiles, aligned `Label : value` stats.
 - Pure, unit-tested logic: the session engine, statistics, plots and screens
   are free of IO; only `main.rs` touches the terminal.
 
-Non-goals for v1: history across runs, config files, themes, multiplayer.
+Non-goals: themes, multiplayer.
 
 ## Typing screen
 
@@ -86,8 +86,10 @@ Three bands, top to bottom, under a one-line header:
 - The plot is a port of `plc`'s `line_chart`: one column per sample, `●`
   start, `─ │ ╭ ╮ ╰ ╯` joins, a right-aligned label on every row, `┼ ┤ └`
   axis, eight rows tall. Samples are resampled to the available width.
-- Heatmap glyphs follow `plc`'s `symbol()`: fixed thresholds, `·` for the best
-  bucket, blank for keys never typed, and a one-line legend.
+- The heatmap is one row of tiles per key row: each key's own label tinted by
+  level on a fixed five-step 256-colour ramp (`plc`'s fixed thresholds),
+  untyped keys dimmed, a tiled legend. Without colour (`oui stats` piped)
+  each label carries `plc`'s `· ░ ▒ ▓ █` shade instead.
 
 ## Model
 
@@ -162,7 +164,20 @@ oui [FILE] [-l LANG] [-w N | -t SECS] [-k qwerty|jcuken]
 `FILE` types a text in order instead of random words. `-w` defaults to 50
 random words, or the whole text for a file; `-t` switches to a timed test.
 
+## History, stats and config
+
+- Every test with a keystroke is appended to `~/.oui/history.jsonl`
+  (`$OUI_HOME`): a versioned summary plus the target words, typed words and
+  raw keystrokes, so stats are recomputed rather than trusted. Newer or
+  unreadable lines are skipped.
+- `oui stats` combines the records: a `plc stat`-style block, WPM per test,
+  both heatmaps over every keystroke, the rankings. Drills rank weak bigrams
+  over the last 20 tests of the same language.
+- `~/.oui/config` defaults every test flag in `plcrc` format; flags win. It
+  is tracked in `~/.rc/oui/ouirc` and linked here, while the history is
+  snapshotted into the private `~/.rcstate` by its `sync.sh`.
+
 ## Later
 
-Run history with trends, more layouts (Mac variants, Dvorak, Colemak), a
-config file.
+More layouts (Mac variants, Dvorak, Colemak); per-day views, possibly as
+`plc oui` reusing plc's calendars once the history is long enough to pay.

@@ -5,6 +5,7 @@ edition = "2021"
 description = "terminal typing test that finds the keys and bigrams slowing you"
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 fastrand = "2"
 
 [profile.release]

@@ -17,7 +17,7 @@ cargo install --path .
 
 ```sh
 oui                       # 50 random English words
-oui -l french -k azerty   # French words, AZERTY heatmap
+oui -l french             # French words
 oui -t 60                 # a timed test of 60 seconds
 oui -w 20 notes.txt       # the first 20 words of a text, in order
 ```
@@ -28,7 +28,7 @@ oui -w 20 notes.txt       # the first 20 words of a text, in order
 | `-l, --language` | Bundled list: `english` (default) or `french`. |
 | `-w, --words` | Words in the test: 50, or the whole file. |
 | `-t, --time` | Make it a timed test of this many seconds. |
-| `-k, --layout` | Heatmap layout: `qwerty` (default) or `azerty`. |
+| `-k, --layout` | Heatmap layout: `qwerty`. |
 
 ## Keys
 

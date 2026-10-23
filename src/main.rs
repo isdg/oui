@@ -310,7 +310,7 @@ mod tests {
         assert!(parse(&["-w", "10", "-t", "30"]).is_err());
         assert!(parse(&["-w", "0"]).is_err());
         assert!(parse(&["notes.txt", "-l", "french"]).is_err());
-        assert!(parse(&["-k", "azerty", "-l", "french"]).is_ok());
+        assert!(parse(&["-k", "qwerty", "-l", "french"]).is_ok());
     }
 
     #[test]

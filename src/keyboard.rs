@@ -12,8 +12,6 @@ use crate::stats::Tally;
 pub enum Layout {
     #[default]
     Qwerty,
-    /// French PC AZERTY.
-    Azerty,
 }
 
 /// Each key lists the characters it produces; the first is its label.
@@ -29,15 +27,6 @@ const QWERTY: Rows = [
     &["zZ", "xX", "cC", "vV", "bB", "nN", "mM", ",<", ".>", "/?"],
 ];
 
-#[rustfmt::skip]
-const AZERTY: Rows = [
-    &["²", "&1", "é2", "\"3", "'4", "(5", "-6", "è7", "_8", "ç9", "à0", ")°",
-      "=+"],
-    &["aA", "zZ", "eE", "rR", "tT", "yY", "uU", "iI", "oO", "pP", "^¨", "$£"],
-    &["qQ", "sS", "dD", "fF", "gG", "hH", "jJ", "kK", "lL", "mM", "ù%", "*µ"],
-    &["<>", "wW", "xX", "cC", "vV", "bB", "nN", ",?", ";.", ":/", "!§"],
-];
-
 /// How far right each row starts, mimicking the physical stagger.
 const STAGGER: [usize; 4] = [0, 2, 3, 4];
 
@@ -51,7 +40,6 @@ impl Layout {
     fn rows(self) -> &'static Rows {
         match self {
             Layout::Qwerty => &QWERTY,
-            Layout::Azerty => &AZERTY,
         }
     }
 
@@ -219,24 +207,13 @@ mod tests {
         let e = Some(Key::At { row: 1, col: 2 });
         assert_eq!(Layout::Qwerty.locate('e'), e);
         assert_eq!(Layout::Qwerty.locate('E'), e);
-        assert_eq!(
-            Layout::Azerty.locate('a'),
-            Some(Key::At { row: 1, col: 0 })
-        );
         assert_eq!(Layout::Qwerty.locate(' '), Some(Key::Space));
     }
 
     #[test]
-    fn accents_use_their_own_key_or_fall_back_to_the_letter() {
-        assert_eq!(
-            Layout::Azerty.locate('é'),
-            Some(Key::At { row: 0, col: 2 })
-        );
-        assert_eq!(
-            Layout::Azerty.locate('É'),
-            Some(Key::At { row: 0, col: 2 })
-        );
-        assert_eq!(Layout::Azerty.locate('ê'), Layout::Azerty.locate('e'));
+    fn accented_letters_fall_back_to_the_plain_letter() {
+        assert_eq!(Layout::Qwerty.locate('é'), Layout::Qwerty.locate('e'));
+        assert_eq!(Layout::Qwerty.locate('Ê'), Layout::Qwerty.locate('e'));
         assert_eq!(Layout::Qwerty.locate('ç'), Layout::Qwerty.locate('c'));
         assert_eq!(Layout::Qwerty.locate('€'), None);
     }

@@ -148,6 +148,7 @@ src/
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline
   plot.rs      plc-style line chart
   keyboard.rs  layouts, character → key, heat aggregation and glyphs
+  geometry.rs  finger, hand and row per key; tallies summed over them
   ui/          typing and results screens (pure render functions)
   main.rs      CLI, terminal, event loop
 ```
@@ -173,6 +174,11 @@ random words, or the whole text for a file; `-t` switches to a timed test.
 - `oui stats` combines the records: a `plc stat`-style block, WPM per test,
   both heatmaps over every keystroke, the rankings. Drills rank weak bigrams
   over the last 20 tests of the same language.
+- `--geometry` sums the key and bigram tallies per finger, row and hand
+  move instead. Fingers follow touch typing on the ANSI board, keyed by
+  physical position, so every layout shares them. Rhythm pools squared
+  deviations from each test's own mean, so getting faster over months does
+  not read as unevenness.
 - `~/.oui/config` defaults every test flag in `plcrc` format; flags win. It
   is tracked in `~/.rc/oui/ouirc` and linked here, while the history is
   snapshotted into the private `~/.rcstate` by its `sync.sh`.

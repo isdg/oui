@@ -83,6 +83,7 @@ later. `oui stats` reads it back:
 oui stats                     # all tests: stats, WPM per test, heatmaps
 oui stats -n 20 -s russian    # the last 20 Russian tests
 oui stats --by week           # a table of weeks, WPM plotted per week
+oui stats --geometry          # fingers, rows and hand moves
 ```
 
 `-b, --by day|week|month` groups tests by calendar period (ISO weeks, in
@@ -90,6 +91,18 @@ the time zone each test was taken in): tests, time typed, mean and best
 WPM and accuracy per period, with the plot showing the mean per period
 instead of every test. Its y-axis starts at the slowest value's ten, not at
 zero, so a trend of a few WPM stays visible.
+
+**Rhythm** is the mean gap between keys, its standard deviation within
+each test, and that deviation as a share of the mean: the higher it is,
+the more uneven the typing, whatever its speed.
+
+`-g, --geometry` swaps the heatmaps and rankings for where those keys sit
+under the hands, in standard touch typing on the one board every layout
+shares: keys, share, miss rate and mean latency per finger and per row,
+then per hand move between consecutive keys -- alternating hands, same
+hand, same finger on two keys, the same key twice, or to and from space.
+Same-finger bigrams, the slowest move, are listed by the time they took
+in all.
 
 `$OUI_HOME` moves `~/.oui` elsewhere.
 
@@ -116,6 +129,7 @@ separated by blank lines. `oui --help` lists all of this too.
 - `src/stats.rs` — WPM, accuracy, timeline, key and bigram tallies.
 - `src/history.rs` — the `history.jsonl` store.
 - `src/summary.rs` — `oui stats`.
+- `src/geometry.rs` — finger, hand and row per key; tallies over them.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
 - `src/extras.rs` — `--with` punctuation, numbers, capitals, symbols.

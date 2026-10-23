@@ -1,5 +1,6 @@
 //! `oui stats`: the recorded tests as plain text in the shape of `plc stat`
-//! -- a stats block, WPM per test or per period, heatmaps and rankings.
+//! -- a stats block, WPM per test or per period, then heatmaps and rankings
+//! or the fingers, rows and hand moves behind them.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -7,17 +8,20 @@ use std::time::Duration;
 
 use clap::ValueEnum;
 
+use crate::geometry::Geometry;
 use crate::history::Record;
 use crate::keyboard::{self, Layout, Measure};
 use crate::plot;
-use crate::stats::{self, Report, Rhythm};
-use crate::ui::results;
+use crate::stats::{self, Report, Rhythm, Tally};
+use crate::ui::{results, show};
 
 /// Widest the per-test plot grows before neighbouring tests are averaged.
 const PLOT_COLS: usize = 70;
 const PLOT_ROWS: usize = 8;
 /// Columns each ranking takes when printed side by side.
 const RANKING_WIDTH: usize = 24;
+/// Same-finger bigrams listed under the geometry tables.
+const SAME_FINGER_TOP: usize = 8;
 
 /// Calendar periods `oui stats --by` groups tests into.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,12 +54,14 @@ impl Period {
 }
 
 /// The summary; `by` adds a table of periods and plots WPM per period
-/// instead of per test; `colour` tints the heatmaps with ANSI.
+/// instead of per test; `colour` tints the heatmaps with ANSI; `geometry`
+/// shows fingers, rows and hand moves instead of heatmaps and rankings.
 pub fn render(
     records: &[Record],
     layout: Layout,
     colour: bool,
     by: Option<Period>,
+    geometry: bool,
 ) -> String {
     let reports: Vec<Report> = records.iter().map(Record::report).collect();
     let all = stats::combine(&reports);
@@ -107,6 +113,10 @@ pub fn render(
             out.push_str(&wpm_plot(&title, &means));
         }
     }
+    if geometry {
+        out.push_str(&geometry_tables(&all, layout));
+        return out;
+    }
     for measure in [Measure::Errors, Measure::Speed] {
         out.push('\n');
         for line in heatmap(&all, layout, measure, colour) {
@@ -135,6 +145,68 @@ fn rhythm(rhythm: &Rhythm) -> Option<String> {
         mean.as_millis(),
         deviation.as_millis()
     ))
+}
+
+fn geometry_tables(r: &Report, layout: Layout) -> String {
+    let g = Geometry::new(layout, r);
+    let named = |name: &str, t: &Tally| (name.to_string(), *t);
+    let fingers: Vec<_> =
+        g.fingers.iter().map(|(f, t)| named(f.name(), t)).collect();
+    let rows: Vec<_> =
+        g.rows.iter().map(|(row, t)| named(row.name(), t)).collect();
+    let moves: Vec<_> =
+        g.transitions.iter().map(|(m, t)| named(m.name(), t)).collect();
+    let pairs = attempts(&moves);
+    let same_finger: Vec<_> = g
+        .costly_same_finger(SAME_FINGER_TOP)
+        .into_iter()
+        .map(|((a, b), t)| (format!("{}{}", show(a), show(b)), t))
+        .collect();
+    let mut out =
+        tally_table("Fingers", "Finger", "Keys", &fingers, attempts(&fingers));
+    out.push_str(&tally_table("Rows", "Row", "Keys", &rows, attempts(&rows)));
+    out.push_str(&tally_table("Hand moves", "Move", "Pairs", &moves, pairs));
+    let title = "Same-finger bigrams";
+    out.push_str(&tally_table(title, "Bigram", "Pairs", &same_finger, pairs));
+    out
+}
+
+fn attempts(rows: &[(String, Tally)]) -> u32 {
+    rows.iter().map(|(_, t)| t.attempts()).sum()
+}
+
+/// Tallies as rows of attempts, their share of `total`, miss rate and mean
+/// latency.
+fn tally_table(
+    title: &str,
+    label: &str,
+    unit: &str,
+    rows: &[(String, Tally)],
+    total: u32,
+) -> String {
+    let mut out = format!("\n     {}\n", results::rule(title, 41));
+    let _ = writeln!(
+        out,
+        "     {label:<12}{unit:>6}{:>8}{:>7}{:>8}",
+        "Share", "Miss", "Mean"
+    );
+    if rows.is_empty() {
+        out.push_str("     (none)\n");
+    }
+    for (name, t) in rows {
+        let share = 100.0 * f64::from(t.attempts()) / f64::from(total.max(1));
+        let miss = 100.0 * t.miss_rate();
+        let mean = t.mean_latency().map_or_else(
+            || "—".to_string(),
+            |d| format!("{} ms", d.as_millis()),
+        );
+        let _ = writeln!(
+            out,
+            "     {name:<12}{:>6}{share:>7.1}%{miss:>6.1}%{mean:>8}",
+            t.attempts()
+        );
+    }
+    out
 }
 
 /// Tests by period, oldest first; records with an unreadable time are left
@@ -293,7 +365,7 @@ mod tests {
             record("ab cd", "ab cd", "2026-10-23T09:00:00+02:00"),
             record("ab cd", "ax", "2026-10-24T09:00:00+02:00"),
         ];
-        let out = render(&records, Layout::Qwerty, false, None);
+        let out = render(&records, Layout::Qwerty, false, None, false);
         assert!(out.contains("Tests        : 2   (1 completed)"), "{out}");
         assert!(out.contains("First / last : 2026-10-23 / 2026-10-24"));
         assert!(out.contains("Accuracy     : 85.7%  (6/7 keys)"));
@@ -307,19 +379,18 @@ mod tests {
     #[test]
     fn plot_without_completed_tests_says_so() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
-        assert!(
-            render(&records, Layout::Qwerty, false, None).contains("(no data)")
-        );
+        assert!(render(&records, Layout::Qwerty, false, None, false)
+            .contains("(no data)"));
     }
 
     #[test]
     fn heatmaps_are_one_tile_row_per_key_row() {
         let records = [record("ab", "ab", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, Layout::Qwerty, false, None);
+        let out = render(&records, Layout::Qwerty, false, None, false);
         assert!(out.contains("       A· S  D"), "{out}");
         assert!(out.contains("· clean   ░ <5%"));
         assert!(!out.contains('\x1b'), "no ANSI unless asked");
-        assert!(render(&records, Layout::Qwerty, true, None)
+        assert!(render(&records, Layout::Qwerty, true, None, false)
             .contains("\x1b[48;5;236;38;5;252m A \x1b[0m"));
     }
 
@@ -358,7 +429,8 @@ mod tests {
             record("ab cd", "ab cd", "2026-10-20T09:00:00+02:00"),
             record("ab cd", "ax", "2026-10-21T09:00:00+02:00"),
         ];
-        let out = render(&records, Layout::Qwerty, false, Some(Period::Week));
+        let out =
+            render(&records, Layout::Qwerty, false, Some(Period::Week), false);
         assert!(out.contains("── By week"), "{out}");
         assert!(
             out.contains("Week        Tests      Time   WPM  Best  Accuracy")
@@ -373,7 +445,8 @@ mod tests {
     #[test]
     fn a_period_without_completed_tests_shows_dashes() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, Layout::Qwerty, false, Some(Period::Day));
+        let out =
+            render(&records, Layout::Qwerty, false, Some(Period::Day), false);
         let row =
             out.lines().find(|l| l.starts_with("     2026-10-24")).unwrap();
         assert!(row.contains("   —     —"), "{row}");
@@ -382,13 +455,46 @@ mod tests {
     #[test]
     fn rhythm_shows_mean_spread_and_variation() {
         let records = [record("ab cd", "ab cd", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, Layout::Qwerty, false, None);
+        let out = render(&records, Layout::Qwerty, false, None, false);
         assert!(
             out.contains("Rhythm       : 150 ms ± 0 ms  (0% variation)"),
             "{out}"
         );
         let one = [record("a", "a", "2026-10-24T09:00:00+02:00")];
-        assert!(!render(&one, Layout::Qwerty, false, None).contains("Rhythm"));
+        assert!(!render(&one, Layout::Qwerty, false, None, false)
+            .contains("Rhythm"));
+    }
+
+    #[test]
+    fn geometry_replaces_heatmaps_with_finger_row_and_move_tables() {
+        let records = [record("de fj", "de fj", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, Layout::Qwerty, false, None, true);
+        for needle in [
+            "── Fingers",
+            "Finger        Keys   Share   Miss    Mean",
+            "L middle         2   40.0%   0.0%  150 ms",
+            "Thumb            1   20.0%   0.0%  150 ms",
+            "── Rows",
+            "Home             3   60.0%",
+            "── Hand moves",
+            "Same finger      1   25.0%   0.0%  150 ms",
+            "Alternate        1   25.0%",
+            "Space            2   50.0%",
+            "── Same-finger bigrams",
+            "de               1   25.0%   0.0%  150 ms",
+        ] {
+            assert!(out.contains(needle), "missing {needle:?}\n{out}");
+        }
+        assert!(out.contains("wpm — per completed test"));
+        assert!(!out.contains("keyboard —") && !out.contains("Worst keys"));
+    }
+
+    #[test]
+    fn geometry_without_same_finger_bigrams_says_none() {
+        let records = [record("fj", "fj", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, Layout::Qwerty, false, None, true);
+        let tail = out.split("── Same-finger bigrams").nth(1).unwrap();
+        assert!(tail.contains("(none)"), "{out}");
     }
 
     #[test]

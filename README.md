@@ -82,7 +82,14 @@ later. `oui stats` reads it back:
 ```sh
 oui stats                     # all tests: stats, WPM per test, heatmaps
 oui stats -n 20 -s russian    # the last 20 Russian tests
+oui stats --by week           # a table of weeks, WPM plotted per week
 ```
+
+`-b, --by day|week|month` groups tests by calendar period (ISO weeks, in
+the time zone each test was taken in): tests, time typed, mean and best
+WPM and accuracy per period, with the plot showing the mean per period
+instead of every test. Its y-axis starts at the slowest value's ten, not at
+zero, so a trend of a few WPM stays visible.
 
 `$OUI_HOME` moves `~/.oui` elsewhere.
 

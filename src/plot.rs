@@ -9,18 +9,31 @@ pub fn line_chart(
     values: &[u64],
     fmt: &dyn Fn(u64) -> String,
 ) -> Vec<String> {
+    line_chart_from(0, max, height, values, fmt)
+}
+
+/// [`line_chart`] over the y-axis `lo..=hi` rather than from zero, for
+/// trends that would flatten into one row otherwise.
+pub fn line_chart_from(
+    lo: u64,
+    hi: u64,
+    height: usize,
+    values: &[u64],
+    fmt: &dyn Fn(u64) -> String,
+) -> Vec<String> {
     let width = values.len();
     if width == 0 || height < 2 {
         return Vec::new();
     }
-    let max = max.max(1);
+    let hi = hi.max(lo + 1);
+    let range = hi - lo;
     let span = height as u64 - 1;
-    let label_width = fmt(max).chars().count().max(fmt(0).chars().count());
+    let label_width = fmt(hi).chars().count().max(fmt(lo).chars().count());
 
     // Row (0 = top) each column's point lands on.
     let rows: Vec<usize> = values
         .iter()
-        .map(|&v| ((max - v.min(max)) * span / max) as usize)
+        .map(|&v| ((hi - v.clamp(lo, hi)) * span / range) as usize)
         .collect();
 
     let mut grid = vec![vec![' '; width]; height];
@@ -46,13 +59,13 @@ pub fn line_chart(
 
     let mut lines = Vec::with_capacity(height + 1);
     for (r, gridrow) in grid.iter().enumerate() {
-        let val = max * (span - r as u64) / span;
+        let val = lo + range * (span - r as u64) / span;
         let sep = if r == 0 { '┼' } else { '┤' };
         let mut line = format!("{:>label_width$} {sep}", fmt(val));
         line.extend(gridrow);
         lines.push(line);
     }
-    let mut bottom = format!("{:>label_width$} └", fmt(0));
+    let mut bottom = format!("{:>label_width$} └", fmt(lo));
     bottom.extend(std::iter::repeat_n('─', width));
     lines.push(bottom);
     lines
@@ -110,6 +123,13 @@ mod tests {
     fn values_above_max_are_clamped() {
         let lines = line_chart(4, 2, &[9], &plain);
         assert_eq!(lines[0], "4 ┼●");
+    }
+
+    #[test]
+    fn a_raised_floor_spreads_a_narrow_range() {
+        let lines = line_chart_from(70, 90, 3, &[70, 80, 90], &plain);
+        assert_eq!(lines, ["90 ┼  ╭", "80 ┤ ╭╯", "70 ┤●╯ ", "70 └───"]);
+        assert_eq!(line_chart_from(50, 50, 2, &[40], &plain)[1], "50 ┤●");
     }
 
     #[test]

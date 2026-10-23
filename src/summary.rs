@@ -1,8 +1,11 @@
 //! `oui stats`: the recorded tests as plain text in the shape of `plc stat`
-//! -- a stats block, WPM per test, both heatmaps and the rankings.
+//! -- a stats block, WPM per test or per period, heatmaps and rankings.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
+
+use clap::ValueEnum;
 
 use crate::history::Record;
 use crate::keyboard::{self, Layout, Measure};
@@ -16,8 +19,44 @@ const PLOT_ROWS: usize = 8;
 /// Columns each ranking takes when printed side by side.
 const RANKING_WIDTH: usize = 24;
 
-/// The summary; `colour` tints the heatmaps with ANSI, else shades them.
-pub fn render(records: &[Record], layout: Layout, colour: bool) -> String {
+/// Calendar periods `oui stats --by` groups tests into.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Period {
+    Day,
+    /// ISO weeks, Monday first.
+    Week,
+    Month,
+}
+
+impl Period {
+    fn name(self) -> &'static str {
+        match self {
+            Period::Day => "day",
+            Period::Week => "week",
+            Period::Month => "month",
+        }
+    }
+
+    /// The period an RFC 3339 time falls in, in the zone it was recorded in.
+    fn key(self, at: &str) -> Option<String> {
+        let time = chrono::DateTime::parse_from_rfc3339(at).ok()?;
+        let format = match self {
+            Period::Day => "%Y-%m-%d",
+            Period::Week => "%G-W%V",
+            Period::Month => "%Y-%m",
+        };
+        Some(time.format(format).to_string())
+    }
+}
+
+/// The summary; `by` adds a table of periods and plots WPM per period
+/// instead of per test; `colour` tints the heatmaps with ANSI.
+pub fn render(
+    records: &[Record],
+    layout: Layout,
+    colour: bool,
+    by: Option<Period>,
+) -> String {
     let reports: Vec<Report> = records.iter().map(Record::report).collect();
     let all = stats::combine(&reports);
     let wpms: Vec<f64> =
@@ -54,7 +93,17 @@ pub fn render(records: &[Record], layout: Layout, colour: bool) -> String {
         all.keystrokes
     );
 
-    out.push_str(&wpm_plot(&wpms));
+    match by {
+        None => out.push_str(&wpm_plot("per completed test", &wpms)),
+        Some(period) => {
+            let groups = group(records, period);
+            out.push_str(&period_table(&groups, period));
+            let means: Vec<f64> =
+                groups.iter().filter_map(|(_, g)| completed_mean(g)).collect();
+            let title = format!("mean per {}", period.name());
+            out.push_str(&wpm_plot(&title, &means));
+        }
+    }
     for measure in [Measure::Errors, Measure::Speed] {
         out.push('\n');
         for line in heatmap(&all, layout, measure, colour) {
@@ -74,8 +123,67 @@ pub fn render(records: &[Record], layout: Layout, colour: bool) -> String {
     out
 }
 
-fn wpm_plot(wpms: &[f64]) -> String {
-    let mut out = String::from("\n          wpm — per completed test\n\n");
+/// Tests by period, oldest first; records with an unreadable time are left
+/// out, since they belong to no period.
+fn group(records: &[Record], period: Period) -> Vec<(String, Vec<&Record>)> {
+    let mut groups: BTreeMap<String, Vec<&Record>> = BTreeMap::new();
+    for record in records {
+        if let Some(key) = period.key(&record.at) {
+            groups.entry(key).or_default().push(record);
+        }
+    }
+    groups.into_iter().collect()
+}
+
+fn period_table(groups: &[(String, Vec<&Record>)], period: Period) -> String {
+    let mut out = format!("\n     ── By {} ", period.name());
+    out.push_str(&"─".repeat(40 - out.chars().count().min(40) + 5));
+    out.push('\n');
+    let name = capitalise(period.name());
+    let _ =
+        writeln!(out, "     {name:<10}  Tests      Time   WPM  Best  Accuracy");
+    for (key, records) in groups {
+        let ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
+        let time = hms(Duration::from_millis(ms));
+        let wpms: Vec<f64> = completed(records).collect();
+        let (wpm, best) = match wpms.is_empty() {
+            true => ("—".to_string(), "—".to_string()),
+            false => {
+                let best = wpms.iter().copied().fold(0.0, f64::max);
+                (format!("{:.0}", mean(&wpms)), format!("{best:.0}"))
+            }
+        };
+        let keys = records.iter().flat_map(|r| &r.keys);
+        let (hits, total) =
+            keys.fold((0, 0), |(h, t), k| (h + usize::from(k.1 == k.2), t + 1));
+        let accuracy = 100.0 * hits as f64 / total.max(1) as f64;
+        let _ = writeln!(
+            out,
+            "     {key:<10}  {:>5}  {time:>8}  {wpm:>4}  {best:>4}  {accuracy:>7.1}%",
+            records.len()
+        );
+    }
+    out
+}
+
+fn completed<'a>(records: &'a [&Record]) -> impl Iterator<Item = f64> + 'a {
+    records.iter().filter(|r| r.completed).map(|r| r.wpm)
+}
+
+fn completed_mean(records: &[&Record]) -> Option<f64> {
+    let wpms: Vec<f64> = completed(records).collect();
+    (!wpms.is_empty()).then(|| mean(&wpms))
+}
+
+fn capitalise(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+}
+
+fn wpm_plot(title: &str, wpms: &[f64]) -> String {
+    let mut out = format!("\n          wpm — {title}\n\n");
     if wpms.is_empty() {
         out.push_str("          (no data)\n");
         return out;
@@ -83,10 +191,13 @@ fn wpm_plot(wpms: &[f64]) -> String {
     let samples = plot::resample(wpms, PLOT_COLS);
     let values: Vec<u64> = samples.iter().map(|v| v.round() as u64).collect();
     let max = values.iter().copied().max().unwrap_or(0);
-    for line in plot::line_chart(max, PLOT_ROWS, &values, &|v| v.to_string()) {
+    // From the slowest value's ten, not zero: a trend spans a few WPM.
+    let lo = values.iter().copied().min().unwrap_or(0) / 10 * 10;
+    let fmt = |v: u64| v.to_string();
+    for line in plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt) {
         let _ = writeln!(out, "     {line}");
     }
-    let label = max.max(1).to_string().len();
+    let label = max.max(lo + 1).to_string().len().max(lo.to_string().len());
     let per_col = wpms.len() as f64 / values.len() as f64;
     let axis = plot::axis(label + 2, values.len(), per_col);
     let _ = writeln!(out, "{}", format!("     {axis}").trim_end());
@@ -168,7 +279,7 @@ mod tests {
             record("ab cd", "ab cd", "2026-10-23T09:00:00+02:00"),
             record("ab cd", "ax", "2026-10-24T09:00:00+02:00"),
         ];
-        let out = render(&records, Layout::Qwerty, false);
+        let out = render(&records, Layout::Qwerty, false, None);
         assert!(out.contains("Tests        : 2   (1 completed)"), "{out}");
         assert!(out.contains("First / last : 2026-10-23 / 2026-10-24"));
         assert!(out.contains("Accuracy     : 85.7%  (6/7 keys)"));
@@ -182,18 +293,76 @@ mod tests {
     #[test]
     fn plot_without_completed_tests_says_so() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
-        assert!(render(&records, Layout::Qwerty, false).contains("(no data)"));
+        assert!(
+            render(&records, Layout::Qwerty, false, None).contains("(no data)")
+        );
     }
 
     #[test]
     fn heatmaps_are_one_tile_row_per_key_row() {
         let records = [record("ab", "ab", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, Layout::Qwerty, false);
+        let out = render(&records, Layout::Qwerty, false, None);
         assert!(out.contains("       A· S  D"), "{out}");
         assert!(out.contains("· clean   ░ <5%"));
         assert!(!out.contains('\x1b'), "no ANSI unless asked");
-        assert!(render(&records, Layout::Qwerty, true)
+        assert!(render(&records, Layout::Qwerty, true, None)
             .contains("\x1b[48;5;236;38;5;252m A \x1b[0m"));
+    }
+
+    #[test]
+    fn periods_key_by_local_day_iso_week_and_month() {
+        let at = "2025-12-29T23:30:00+01:00";
+        assert_eq!(Period::Day.key(at).as_deref(), Some("2025-12-29"));
+        assert_eq!(
+            Period::Week.key(at).as_deref(),
+            Some("2026-W01"),
+            "ISO year"
+        );
+        assert_eq!(Period::Month.key(at).as_deref(), Some("2025-12"));
+        assert_eq!(Period::Day.key("yesterday"), None);
+    }
+
+    #[test]
+    fn grouping_orders_periods_and_drops_undated_tests() {
+        let records = [
+            record("ab", "ab", "2026-10-24T09:00:00+02:00"),
+            record("ab", "ab", "2026-10-20T09:00:00+02:00"),
+            record("ab", "ab", "2026-10-24T21:00:00+02:00"),
+            record("ab", "ab", "not a time"),
+        ];
+        let groups = group(&records, Period::Day);
+        let keys: Vec<(&str, usize)> =
+            groups.iter().map(|(k, g)| (k.as_str(), g.len())).collect();
+        assert_eq!(keys, [("2026-10-20", 1), ("2026-10-24", 2)]);
+        assert_eq!(group(&records, Period::Week).len(), 1);
+    }
+
+    #[test]
+    fn by_period_adds_a_table_and_plots_its_means() {
+        let records = [
+            record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00"),
+            record("ab cd", "ab cd", "2026-10-20T09:00:00+02:00"),
+            record("ab cd", "ax", "2026-10-21T09:00:00+02:00"),
+        ];
+        let out = render(&records, Layout::Qwerty, false, Some(Period::Week));
+        assert!(out.contains("── By week"), "{out}");
+        assert!(
+            out.contains("Week        Tests      Time   WPM  Best  Accuracy")
+        );
+        assert!(out.contains("2026-W42"), "{out}");
+        let row = out.lines().find(|l| l.starts_with("     2026-W43")).unwrap();
+        assert!(row.contains("    2  ") && row.ends_with("85.7%"), "{row}");
+        assert!(out.contains("wpm — mean per week"));
+        assert!(!out.contains("per completed test"));
+    }
+
+    #[test]
+    fn a_period_without_completed_tests_shows_dashes() {
+        let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, Layout::Qwerty, false, Some(Period::Day));
+        let row =
+            out.lines().find(|l| l.starts_with("     2026-10-24")).unwrap();
+        assert!(row.contains("   —     —"), "{row}");
     }
 
     #[test]

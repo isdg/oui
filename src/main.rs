@@ -20,7 +20,7 @@ use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
-use oui::summary;
+use oui::summary::{self, Period};
 use oui::ui;
 use oui::words::{self, Mode, Source};
 
@@ -78,6 +78,10 @@ enum Cmd {
         /// Heatmap layout; detected from the recorded words by default.
         #[arg(short = 'k', long, value_enum)]
         layout: Option<Layout>,
+        /// Group tests by day, week or month: a table of periods, and WPM
+        /// plotted per period instead of per test.
+        #[arg(short, long, value_enum)]
+        by: Option<Period>,
     },
 }
 
@@ -354,8 +358,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let store = Store::open()?;
     match cli.cmd {
-        Some(Cmd::Stats { last, source, layout }) => {
-            stats(&store, last, source.as_deref(), layout)
+        Some(Cmd::Stats { last, source, layout, by }) => {
+            stats(&store, last, source.as_deref(), layout, by)
         }
         None => {
             let config = Config::load(&store.dir().join("config"))?;
@@ -372,6 +376,7 @@ fn stats(
     last: Option<NonZeroUsize>,
     source: Option<&str>,
     layout: Option<Layout>,
+    by: Option<Period>,
 ) -> Result<()> {
     let history = store.load()?;
     if history.skipped > 0 {
@@ -393,7 +398,7 @@ fn stats(
         Layout::detect(&words)
     });
     let colour = std::io::stdout().is_terminal();
-    print!("{}", summary::render(&records, layout, colour));
+    print!("{}", summary::render(&records, layout, colour, by));
     Ok(())
 }
 
@@ -732,9 +737,12 @@ mod tests {
                 last: NonZeroUsize::new(5),
                 source: Some("russian".into()),
                 layout: None,
+                by: None,
             })
         );
         assert!(parse(&["stats", "-w", "10"]).is_err());
+        let by = parse(&["stats", "--by", "week"]).unwrap().cmd;
+        assert!(matches!(by, Some(Cmd::Stats { by: Some(Period::Week), .. })));
         assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
     }
 

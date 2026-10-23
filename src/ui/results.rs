@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn plot_spans_the_timeline_with_a_axis() {
+    fn plot_spans_the_timeline_with_an_axis() {
         let lines = wpm_plot(&report(), 60);
         assert_eq!(lines.len(), 2 + PLOT_ROWS + 2);
         assert!(lines[2].starts_with("86 ┼"));

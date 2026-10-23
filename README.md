@@ -138,3 +138,7 @@ separated by blank lines. `oui --help` lists all of this too.
 - `src/ui/` — the typing and results screens.
 - `resources/` — word lists and bundled texts.
 - `docs/design.md` — design notes.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

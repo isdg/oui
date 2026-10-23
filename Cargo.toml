@@ -3,6 +3,7 @@ name = "oui"
 version = "0.1.0"
 edition = "2021"
 description = "terminal typing test that finds the keys and bigrams slowing you"
+license = "MIT"
 
 [[bin]]
 name = "oui"

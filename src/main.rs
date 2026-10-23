@@ -14,6 +14,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
@@ -66,6 +67,16 @@ struct TestArgs {
     /// Bundled word list to draw from: english, french or russian.
     #[arg(short, long, default_value = "english", conflicts_with = "file")]
     language: String,
+    /// Extras mixed into random words, comma-separated: punctuation,
+    /// numbers, capitals, symbols (or p, n, c, s).
+    #[arg(
+        short = 'W',
+        long,
+        value_enum,
+        value_delimiter = ',',
+        conflicts_with = "file"
+    )]
+    with: Vec<Extra>,
     /// Number of words in the test (default 50, or the whole file).
     #[arg(short, long, conflicts_with = "time")]
     words: Option<NonZeroUsize>,
@@ -94,6 +105,8 @@ struct Feed {
     source: Source,
     /// Bigrams being drilled; empty for a normal test.
     drill: Vec<(char, char)>,
+    /// The `--with` extras; drills are left plain so they hit their bigrams.
+    decorator: Decorator,
     /// Words taken from the source for the current session.
     drawn: usize,
     rng: Rng,
@@ -107,7 +120,7 @@ impl Feed {
         }
         let words = self.source.take(self.drawn, n, &mut self.rng);
         self.drawn += words.len();
-        words
+        self.decorator.apply(words, &mut self.rng)
     }
 }
 
@@ -118,6 +131,7 @@ struct Setup {
     layout: Layout,
     title: String,
     meta: Meta,
+    extras: Vec<Extra>,
 }
 
 struct App {
@@ -137,14 +151,20 @@ struct App {
 
 impl App {
     fn new(setup: Setup, store: Option<Store>) -> Self {
-        let Setup { source, limit, layout, title, meta } = setup;
+        let Setup { source, limit, layout, title, meta, extras } = setup;
         let (recent, notice) = match store.as_ref().map(|s| recent(s, &meta)) {
             Some(Err(e)) => (Vec::new(), Some(format!("history: {e:#}"))),
             Some(Ok(recent)) => (recent, None),
             None => (Vec::new(), None),
         };
         let mut app = App {
-            feed: Feed { source, drill: Vec::new(), drawn: 0, rng: Rng::new() },
+            feed: Feed {
+                source,
+                drill: Vec::new(),
+                decorator: Decorator::new(&extras),
+                drawn: 0,
+                rng: Rng::new(),
+            },
             limit,
             layout,
             title,
@@ -160,6 +180,7 @@ impl App {
 
     fn restart(&mut self) {
         self.feed.drawn = 0;
+        self.feed.decorator.reset();
         let session = match self.limit {
             Limit::Words(n) => Session::new(self.feed.take(n), None),
             Limit::Time(limit) => {
@@ -355,9 +376,18 @@ fn select(
 fn setup(cli: &TestArgs) -> Result<Setup> {
     let (source, name) = source(cli)?;
     let limit = limit(cli, &source);
+    let mut extras = cli.with.clone();
+    extras.sort();
+    extras.dedup();
+    let with: Vec<String> =
+        extras.iter().map(|e| e.name().to_string()).collect();
+    let what = match with.as_slice() {
+        [] => name.clone(),
+        with => format!("{name} with {}", with.join(", ")),
+    };
     let title = match limit {
-        Limit::Words(n) => format!("{name} · {n} words"),
-        Limit::Time(d) => format!("{name} · {}s", d.as_secs()),
+        Limit::Words(n) => format!("{what} · {n} words"),
+        Limit::Time(d) => format!("{what} · {}s", d.as_secs()),
     };
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
     let mode = match source {
@@ -367,10 +397,10 @@ fn setup(cli: &TestArgs) -> Result<Setup> {
     let meta = Meta {
         source: name,
         mode: mode.to_string(),
-        with: Vec::new(),
+        with,
         layout: layout.name().to_string(),
     };
-    Ok(Setup { source, limit, layout, title, meta })
+    Ok(Setup { source, limit, layout, title, meta, extras })
 }
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
@@ -451,6 +481,7 @@ mod tests {
             layout,
             title: "t".into(),
             meta: Meta::default(),
+            extras: Vec::new(),
         }
     }
 
@@ -504,6 +535,19 @@ mod tests {
         assert!(parse(&["-k", "qwerty", "-l", "french"]).is_ok());
         assert!(parse(&["-k", "йцукен"])
             .is_ok_and(|c| c.test.layout == Some(Layout::Jcuken)));
+    }
+
+    #[test]
+    fn extras_parse_as_one_list_and_name_the_test() {
+        let args = cli(&["-W", "n,p", "--with", "p,symbols", "-w", "9"]);
+        let setup = setup(&args).unwrap();
+        assert_eq!(setup.meta.with, ["punctuation", "numbers", "symbols"]);
+        assert_eq!(
+            setup.title,
+            "english with punctuation, numbers, symbols · 9 words"
+        );
+        assert!(Cli::try_parse_from(["oui", "-W", "x"]).is_err());
+        assert!(Cli::try_parse_from(["oui", "notes.txt", "-W", "p"]).is_err());
     }
 
     #[test]

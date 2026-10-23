@@ -96,7 +96,7 @@ fn draw_input(frame: &mut Frame, area: Rect, s: &Session) {
     frame.set_cursor_position((inner.x + col, inner.y));
 }
 
-/// The whole text, wrapped, starting a line above the current one.
+/// The whole text, wrapped and scrolled only as far as [`first_row`] needs.
 fn draw_text(frame: &mut Frame, area: Rect, s: &Session) {
     let block = Block::bordered().padding(Padding::horizontal(1));
     let inner = block.inner(area);
@@ -104,7 +104,8 @@ fn draw_text(frame: &mut Frame, area: Rect, s: &Session) {
         (0..s.words().len()).map(|i| width(s, i)).collect();
     let rows = wrap(&widths, usize::from(inner.width));
     let at = rows.iter().position(|r| r.contains(&s.current()));
-    let first = at.unwrap_or(rows.len()).saturating_sub(1);
+    let height = usize::from(inner.height);
+    let first = first_row(at.unwrap_or(rows.len()), rows.len(), height);
     let render = |row: &Range<usize>| {
         let mut spans = Vec::new();
         for i in row.clone() {
@@ -115,10 +116,15 @@ fn draw_text(frame: &mut Frame, area: Rect, s: &Session) {
         }
         Line::from(spans)
     };
-    let height = usize::from(inner.height);
     let lines: Vec<Line> =
         rows.iter().skip(first).take(height).map(render).collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// The top line to show: the first while the text fits, else the one above
+/// the current line, but never so low that the panel's bottom goes empty.
+fn first_row(current: usize, rows: usize, height: usize) -> usize {
+    current.saturating_sub(1).min(rows.saturating_sub(height))
 }
 
 /// Columns word `i` takes: its target, or the input if that overflows it.
@@ -206,6 +212,19 @@ mod tests {
         assert_eq!(wrap(&[2, 2, 2], 5), [0..2, 2..3]);
         assert_eq!(wrap(&[9, 1], 5), [0..1, 1..2]);
         assert_eq!(wrap(&[], 5), []);
+    }
+
+    #[test]
+    fn text_that_fits_never_scrolls() {
+        assert_eq!(first_row(3, 4, 9), 0);
+        assert_eq!(first_row(0, 0, 9), 0);
+    }
+
+    #[test]
+    fn long_text_keeps_a_line_of_context_and_a_full_panel() {
+        assert_eq!(first_row(5, 20, 4), 4);
+        assert_eq!(first_row(19, 20, 4), 16);
+        assert_eq!(first_row(0, 20, 4), 0);
     }
 
     #[test]

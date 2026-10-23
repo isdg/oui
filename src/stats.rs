@@ -160,6 +160,19 @@ impl Report {
         typos
     }
 
+    /// The bigrams worth drilling: the `n` most missed, then the `n`
+    /// slowest not already listed.
+    pub fn weak_bigrams(&self, n: usize) -> Vec<(char, char)> {
+        let mut weak: Vec<_> =
+            self.error_bigrams(n).into_iter().map(|(b, _)| b).collect();
+        for (b, _) in self.slow_bigrams(n) {
+            if !weak.contains(&b) {
+                weak.push(b);
+            }
+        }
+        weak
+    }
+
     fn bigram_list(&self) -> Vec<((char, char), Tally)> {
         self.bigrams.iter().map(|(&b, &t)| (b, t)).collect()
     }
@@ -292,6 +305,16 @@ mod tests {
         let keys = [('a', 0), ('b', 100), ('a', 400), ('b', 500), ('c', 1500)];
         let r = play(&["ababc"], &keys);
         assert_eq!(r.slow_bigrams(5), [(('a', 'b'), MS * 100)]);
+    }
+
+    #[test]
+    fn weak_bigrams_merge_misses_and_slowness_without_repeats() {
+        let slow =
+            |misses| Tally { hits: 2, misses, timed: 2, latency: MS * 600 };
+        let bigrams =
+            BTreeMap::from([(('q', 'u'), slow(1)), (('r', 'é'), slow(0))]);
+        let r = Report { bigrams, ..Report::default() };
+        assert_eq!(r.weak_bigrams(5), [('q', 'u'), ('r', 'é')]);
     }
 
     #[test]

@@ -25,6 +25,8 @@ const DEFAULT_WORDS: usize = 50;
 const BATCH: usize = 100;
 /// Redraw interval, which keeps the clock of a timed test moving.
 const FRAME: Duration = Duration::from_millis(100);
+/// Bigrams a drill takes from each of the error and slowness rankings.
+const DRILL: usize = 3;
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
@@ -57,14 +59,33 @@ enum Screen {
     Results { report: Report, measure: Measure },
 }
 
-struct App {
+/// Where a session's words come from: the source, or a drill over it.
+struct Feed {
     source: Source,
+    /// Bigrams being drilled; empty for a normal test.
+    drill: Vec<(char, char)>,
+    /// Words taken from the source for the current session.
+    drawn: usize,
+    rng: Rng,
+}
+
+impl Feed {
+    fn take(&mut self, n: usize) -> Vec<String> {
+        if !self.drill.is_empty() {
+            let pool = self.source.words();
+            return words::practice(pool, &self.drill, n, &mut self.rng);
+        }
+        let words = self.source.take(self.drawn, n, &mut self.rng);
+        self.drawn += words.len();
+        words
+    }
+}
+
+struct App {
+    feed: Feed,
     limit: Limit,
     layout: Layout,
     title: String,
-    rng: Rng,
-    /// Words taken from the source for the current session.
-    drawn: usize,
     screen: Screen,
 }
 
@@ -76,12 +97,10 @@ impl App {
         title: String,
     ) -> Self {
         let mut app = App {
-            source,
+            feed: Feed { source, drill: Vec::new(), drawn: 0, rng: Rng::new() },
             limit,
             layout,
             title,
-            rng: Rng::new(),
-            drawn: 0,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
         };
         app.restart();
@@ -89,18 +108,24 @@ impl App {
     }
 
     fn restart(&mut self) {
-        self.drawn = 0;
+        self.feed.drawn = 0;
         let session = match self.limit {
-            Limit::Words(n) => Session::new(self.take(n), None),
-            Limit::Time(limit) => Session::new(self.take(BATCH), Some(limit)),
+            Limit::Words(n) => Session::new(self.feed.take(n), None),
+            Limit::Time(limit) => {
+                Session::new(self.feed.take(BATCH), Some(limit))
+            }
         };
         self.screen = Screen::Typing(session);
     }
 
-    fn take(&mut self, n: usize) -> Vec<String> {
-        let words = self.source.take(self.drawn, n, &mut self.rng);
-        self.drawn += words.len();
-        words
+    fn title(&self) -> String {
+        if self.feed.drill.is_empty() {
+            return self.title.clone();
+        }
+        let show =
+            |&(a, b): &(char, char)| format!("{}{}", ui::show(a), ui::show(b));
+        let drill: Vec<String> = self.feed.drill.iter().map(show).collect();
+        format!("{} · drill {}", self.title, drill.join(" "))
     }
 
     /// Advances the clock; returns to results once the session is over.
@@ -108,9 +133,7 @@ impl App {
         let Screen::Typing(session) = &mut self.screen else { return };
         session.tick(now);
         if session.limit().is_some() && session.remaining() < BATCH / 2 {
-            let more = self.source.take(self.drawn, BATCH, &mut self.rng);
-            self.drawn += more.len();
-            session.extend(more);
+            session.extend(self.feed.take(BATCH));
         }
         if session.finished() {
             let report = Report::new(session, session.elapsed(now));
@@ -151,9 +174,16 @@ impl App {
                 }
                 self.tick(now);
             }
-            Screen::Results { measure, .. } => match key.code {
+            Screen::Results { report, measure } => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return false,
-                KeyCode::Char('r') => self.restart(),
+                KeyCode::Char('r') => {
+                    self.feed.drill.clear();
+                    self.restart();
+                }
+                KeyCode::Char('p') => {
+                    self.feed.drill = report.weak_bigrams(DRILL);
+                    self.restart();
+                }
                 KeyCode::Tab => *measure = measure.toggle(),
                 _ => {}
             },
@@ -162,17 +192,14 @@ impl App {
     }
 
     fn draw(&self, frame: &mut Frame, now: Instant) {
+        let title = self.title();
         match &self.screen {
             Screen::Typing(session) => {
-                ui::typing::draw(frame, session, now, &self.title)
+                ui::typing::draw(frame, session, now, &title)
             }
-            Screen::Results { report, measure } => ui::results::draw(
-                frame,
-                report,
-                self.layout,
-                *measure,
-                &self.title,
-            ),
+            Screen::Results { report, measure } => {
+                ui::results::draw(frame, report, self.layout, *measure, &title)
+            }
         }
     }
 }
@@ -343,6 +370,35 @@ mod tests {
             "b",
             "text resumes where it left off"
         );
+    }
+
+    #[test]
+    fn drill_feeds_back_the_weak_bigrams_until_a_new_test() {
+        let text = words("ab cd");
+        let mut app =
+            App::new(text, Limit::Words(2), Layout::Qwerty, "t".into());
+        for code in [
+            KeyCode::Char('a'),
+            KeyCode::Char('x'),
+            KeyCode::Backspace,
+            KeyCode::Char('b'),
+            KeyCode::Char(' '),
+            KeyCode::Char('c'),
+            KeyCode::Char('d'),
+        ] {
+            press(&mut app, code);
+        }
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.feed.drill, [('a', 'b')]);
+        assert_eq!(app.title(), "t · drill ab");
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words(), ["ab", "ab"]);
+        for c in "ab ab".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.feed.drill.is_empty());
+        assert_eq!(app.title(), "t");
     }
 
     #[test]

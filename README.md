@@ -44,7 +44,10 @@ While typing:
 | `ctrl-c` | Quit. |
 
 On the results screen, `tab` flips the heatmap between errors and speed, `r`
-starts a new test and `q` quits.
+starts a new test, `p` starts a **drill** and `q` quits. A drill draws words
+in proportion to how many of your weakest bigrams they contain (the three
+most missed and the three slowest), and keeps drilling on `tab` until you
+press `r`.
 
 ## Reading the results
 

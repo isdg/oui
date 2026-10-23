@@ -54,9 +54,72 @@ pub fn sample(pool: &[String], n: usize, rng: &mut Rng) -> Vec<String> {
     (0..n).map(|_| pool[rng.usize(..pool.len())].clone()).collect()
 }
 
+/// `n` words drawn in proportion to how many `targets` bigrams each holds,
+/// or plain samples when no word holds any.
+pub fn practice(
+    pool: &[String],
+    targets: &[(char, char)],
+    n: usize,
+    rng: &mut Rng,
+) -> Vec<String> {
+    let scored: Vec<(&String, usize)> = pool
+        .iter()
+        .map(|w| (w, score(w, targets)))
+        .filter(|&(_, s)| s > 0)
+        .collect();
+    let total: usize = scored.iter().map(|&(_, s)| s).sum();
+    if total == 0 {
+        return sample(pool, n, rng);
+    }
+    let pick = |mut x: usize| {
+        for &(word, s) in &scored {
+            if x < s {
+                return word.clone();
+            }
+            x -= s;
+        }
+        unreachable!("x is below the total score")
+    };
+    (0..n).map(|_| pick(rng.usize(..total))).collect()
+}
+
+/// Occurrences of `targets` in `word`, its boundaries included as `' '`.
+fn score(word: &str, targets: &[(char, char)]) -> usize {
+    let padded: Vec<char> =
+        std::iter::once(' ').chain(word.chars()).chain([' ']).collect();
+    let pairs = padded.windows(2);
+    pairs.filter(|p| targets.contains(&(p[0], p[1]))).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn score_counts_inner_and_boundary_bigrams() {
+        assert_eq!(score("aqua", &[('q', 'u')]), 1);
+        assert_eq!(score("tête", &[(' ', 't'), ('e', ' ')]), 2);
+        assert_eq!(score("abc", &[('x', 'y')]), 0);
+    }
+
+    #[test]
+    fn practice_draws_only_words_holding_targets() {
+        let pool = owned(&["quand", "que", "le", "de", "jardin"]);
+        let mut rng = Rng::with_seed(3);
+        let drill = practice(&pool, &[('q', 'u')], 40, &mut rng);
+        assert_eq!(drill.len(), 40);
+        assert!(drill.iter().all(|w| w.starts_with("qu")));
+        assert!(drill.contains(&"quand".to_string()));
+    }
+
+    #[test]
+    fn practice_falls_back_to_sampling() {
+        let pool = owned(&["le", "de"]);
+        let mut rng = Rng::with_seed(3);
+        let drill = practice(&pool, &[('q', 'u')], 10, &mut rng);
+        assert!(drill.iter().all(|w| pool.contains(w)));
+        assert!(practice(&[], &[('q', 'u')], 3, &mut rng).is_empty());
+    }
 
     fn owned(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()

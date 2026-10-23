@@ -10,7 +10,7 @@ use clap::ValueEnum;
 use crate::history::Record;
 use crate::keyboard::{self, Layout, Measure};
 use crate::plot;
-use crate::stats::{self, Report};
+use crate::stats::{self, Report, Rhythm};
 use crate::ui::results;
 
 /// Widest the per-test plot grows before neighbouring tests are averaged.
@@ -92,6 +92,9 @@ pub fn render(
         all.hits,
         all.keystrokes
     );
+    if let Some(rhythm) = rhythm(&all.rhythm) {
+        let _ = writeln!(out, "     Rhythm       : {rhythm}");
+    }
 
     match by {
         None => out.push_str(&wpm_plot("per completed test", &wpms)),
@@ -121,6 +124,17 @@ pub fn render(
         let _ = writeln!(out, "{}", format!("     {line}").trim_end());
     }
     out
+}
+
+/// Mean latency, its spread, and the spread as a share of the mean.
+fn rhythm(rhythm: &Rhythm) -> Option<String> {
+    let (mean, deviation) = (rhythm.mean()?, rhythm.deviation()?);
+    let variation = rhythm.variation().unwrap_or(0.0) * 100.0;
+    Some(format!(
+        "{} ms ± {} ms  ({variation:.0}% variation)",
+        mean.as_millis(),
+        deviation.as_millis()
+    ))
 }
 
 /// Tests by period, oldest first; records with an unreadable time are left
@@ -363,6 +377,18 @@ mod tests {
         let row =
             out.lines().find(|l| l.starts_with("     2026-10-24")).unwrap();
         assert!(row.contains("   —     —"), "{row}");
+    }
+
+    #[test]
+    fn rhythm_shows_mean_spread_and_variation() {
+        let records = [record("ab cd", "ab cd", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, Layout::Qwerty, false, None);
+        assert!(
+            out.contains("Rhythm       : 150 ms ± 0 ms  (0% variation)"),
+            "{out}"
+        );
+        let one = [record("a", "a", "2026-10-24T09:00:00+02:00")];
+        assert!(!render(&one, Layout::Qwerty, false, None).contains("Rhythm"));
     }
 
     #[test]

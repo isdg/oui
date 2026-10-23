@@ -207,6 +207,7 @@ mod tests {
             keys: BTreeMap::from([('o', tally(14, 3)), ('e', tally(30, 0))]),
             bigrams: BTreeMap::from([(('q', 'u'), tally(2, 2))]),
             typos: BTreeMap::from([(('o', 'i'), 2)]),
+            ..Report::default()
         }
     }
 

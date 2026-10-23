@@ -61,6 +61,56 @@ impl AddAssign for Tally {
     }
 }
 
+/// Clean inter-key latencies: their count, sum and squared deviations from
+/// each test's own mean, so drift between tests does not read as jitter.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Rhythm {
+    pub timed: u32,
+    /// Seconds, and seconds squared.
+    pub sum: f64,
+    pub squares: f64,
+    /// Tests with a timed keystroke, one degree of freedom spent on each.
+    pub tests: u32,
+}
+
+impl Rhythm {
+    fn new(latencies: &[Duration]) -> Self {
+        let secs: Vec<f64> =
+            latencies.iter().map(Duration::as_secs_f64).collect();
+        let (timed, sum) = (secs.len() as u32, secs.iter().sum::<f64>());
+        let mean = sum / f64::from(timed.max(1));
+        let squares = secs.iter().map(|s| (s - mean).powi(2)).sum();
+        Rhythm { timed, sum, squares, tests: u32::from(timed > 0) }
+    }
+
+    pub fn mean(&self) -> Option<Duration> {
+        let mean = || Duration::from_secs_f64(self.sum / f64::from(self.timed));
+        (self.timed > 0).then(mean)
+    }
+
+    /// The sample standard deviation within tests.
+    pub fn deviation(&self) -> Option<Duration> {
+        let dof = self.timed.checked_sub(self.tests).filter(|&n| n > 0)?;
+        let variance = self.squares / f64::from(dof);
+        Some(Duration::from_secs_f64(variance.sqrt()))
+    }
+
+    /// Deviation over mean: how uneven the typing is, whatever its speed.
+    pub fn variation(&self) -> Option<f64> {
+        let mean = self.mean().filter(|m| !m.is_zero())?;
+        Some(self.deviation()?.as_secs_f64() / mean.as_secs_f64())
+    }
+}
+
+impl AddAssign for Rhythm {
+    fn add_assign(&mut self, other: Self) {
+        self.timed += other.timed;
+        self.sum += other.sum;
+        self.squares += other.squares;
+        self.tests += other.tests;
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Report {
     pub elapsed: Duration,
@@ -79,6 +129,7 @@ pub struct Report {
     pub bigrams: BTreeMap<(char, char), Tally>,
     /// Miss counts keyed by (target, typed) character.
     pub typos: BTreeMap<(char, char), u32>,
+    pub rhythm: Rhythm,
 }
 
 impl Report {
@@ -108,8 +159,10 @@ impl Report {
             timeline: timeline(log, elapsed),
             ..Report::default()
         };
+        let mut latencies = Vec::new();
         for (i, k) in log.iter().enumerate() {
             let latency = latency(log, i);
+            latencies.extend(latency);
             report.keys.entry(k.expected).or_default().record(k.hit(), latency);
             if let Some(prev) = k.prev {
                 let bigram = report.bigrams.entry((prev, k.expected));
@@ -119,6 +172,7 @@ impl Report {
                 *report.typos.entry((k.expected, k.typed)).or_default() += 1;
             }
         }
+        report.rhythm = Rhythm::new(&latencies);
         report
     }
 
@@ -211,6 +265,7 @@ pub fn combine<'a>(reports: impl IntoIterator<Item = &'a Report>) -> Report {
         for (&p, &count) in &r.typos {
             *total.typos.entry(p).or_default() += count;
         }
+        total.rhythm += r.rhythm;
     }
     if n > 0.0 {
         total.wpm /= n;
@@ -373,6 +428,31 @@ mod tests {
             BTreeMap::from([(('q', 'u'), slow(1)), (('r', 'é'), slow(0))]);
         let r = Report { bigrams, ..Report::default() };
         assert_eq!(r.weak_bigrams(5), [('q', 'u'), ('r', 'é')]);
+    }
+
+    #[test]
+    fn rhythm_spreads_clean_latencies() {
+        let steady = play(&["abcd"], &steady("abcd", 100));
+        assert_eq!(steady.rhythm.timed, 3);
+        assert_eq!(steady.rhythm.mean(), Some(MS * 100));
+        assert_eq!(steady.rhythm.variation(), Some(0.0));
+        let keys = [('a', 0), ('b', 100), ('c', 400), ('d', 500)];
+        let uneven = play(&["abcd"], &keys).rhythm;
+        assert_eq!(uneven.mean().map(|m| m.as_millis()), Some(166));
+        let deviation = uneven.deviation().unwrap().as_secs_f64();
+        assert!((deviation - 0.115_47).abs() < 1e-5, "{deviation}");
+        assert_eq!(play(&["a"], &[('a', 0)]).rhythm.deviation(), None);
+    }
+
+    #[test]
+    fn combined_rhythm_ignores_drift_between_tests() {
+        let slow = play(&["abc"], &steady("abc", 300));
+        let fast = play(&["abc"], &steady("abc", 100));
+        let all = combine([&slow, &fast]).rhythm;
+        assert_eq!((all.timed, all.tests), (4, 2));
+        assert_eq!(all.mean(), Some(MS * 200));
+        assert_eq!(all.deviation(), Some(Duration::ZERO));
+        assert_eq!(Rhythm::default().variation(), None);
     }
 
     #[test]

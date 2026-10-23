@@ -96,7 +96,7 @@ fn wpm_plot(r: &Report, width: u16) -> Vec<String> {
     let max = values.iter().copied().max().unwrap_or(0);
     out.extend(plot::line_chart(max, PLOT_ROWS, &values, &|v| v.to_string()));
     let secs_per_col = r.timeline.len() as f64 / values.len() as f64;
-    out.push(plot::time_axis(label, values.len(), secs_per_col));
+    out.push(plot::axis(label, values.len(), secs_per_col));
     out
 }
 
@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn plot_spans_the_timeline_with_a_time_axis() {
+    fn plot_spans_the_timeline_with_a_axis() {
         let lines = wpm_plot(&report(), 60);
         assert_eq!(lines.len(), 2 + PLOT_ROWS + 2);
         assert!(lines[2].starts_with("86 ┼"));

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::ops::AddAssign;
 use std::time::Duration;
 
-use crate::session::{Keystroke, Session};
+use crate::session::{self, Keystroke, Session};
 
 /// Longer gaps are pauses, not typing, and would swamp the latency means.
 pub const PAUSE: Duration = Duration::from_secs(2);
@@ -83,17 +83,27 @@ pub struct Report {
 
 impl Report {
     pub fn new(session: &Session, elapsed: Duration) -> Self {
-        let log = session.log();
+        let (words, typed) = (session.words(), session.typed());
+        Report::from_parts(session.log(), words, typed, elapsed)
+    }
+
+    /// A report over a session's parts, as a history record stores them.
+    pub fn from_parts(
+        log: &[Keystroke],
+        words: &[String],
+        typed: &[String],
+        elapsed: Duration,
+    ) -> Self {
         let hits = log.iter().filter(|k| k.hit()).count();
-        let pairs = session.typed().iter().zip(session.words());
+        let pairs = typed.iter().zip(words);
         let mut report = Report {
             elapsed,
-            wpm: wpm(session.correct_chars(), elapsed),
+            wpm: wpm(session::correct_chars(words, typed), elapsed),
             raw_wpm: wpm(log.len(), elapsed),
             accuracy: accuracy(log),
             hits,
             keystrokes: log.len(),
-            words: session.typed().len(),
+            words: typed.len(),
             correct_words: pairs.filter(|(typed, word)| typed == word).count(),
             timeline: timeline(log, elapsed),
             ..Report::default()

@@ -108,15 +108,8 @@ impl Session {
         }
     }
 
-    /// Characters of correctly typed words, counting the space that
-    /// submitted each one.
     pub fn correct_chars(&self) -> usize {
-        let last = self.words.len().saturating_sub(1);
-        let correct = self.typed.iter().zip(&self.words).enumerate();
-        correct
-            .filter(|(_, (typed, word))| typed == word)
-            .map(|(i, (_, word))| word.chars().count() + usize::from(i < last))
-            .sum()
+        correct_chars(&self.words, &self.typed)
     }
 
     pub fn tick(&mut self, now: Instant) {
@@ -202,6 +195,17 @@ impl Session {
             self.input = self.typed.pop().unwrap_or_default();
         }
     }
+}
+
+/// Characters of correctly typed words, counting the space that submitted
+/// each one; the last word of `words` is finished without a space.
+pub fn correct_chars(words: &[String], typed: &[String]) -> usize {
+    let last = words.len().saturating_sub(1);
+    let correct = typed.iter().zip(words).enumerate();
+    correct
+        .filter(|(_, (typed, word))| typed == word)
+        .map(|(i, (_, word))| word.chars().count() + usize::from(i < last))
+        .sum()
 }
 
 #[cfg(test)]

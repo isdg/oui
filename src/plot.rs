@@ -69,8 +69,8 @@ pub fn resample(values: &[f64], width: usize) -> Vec<f64> {
 }
 
 /// The x-axis under a chart of `cols` columns, indented by `indent`: a mark
-/// every ten columns giving the time there, `secs_per_col` apart.
-pub fn time_axis(indent: usize, cols: usize, secs_per_col: f64) -> String {
+/// every ten columns giving the position there, `per_col` units apart.
+pub fn axis(indent: usize, cols: usize, per_col: f64) -> String {
     let mut out = " ".repeat(indent);
     let mut col = 0;
     while col < cols {
@@ -79,7 +79,7 @@ pub fn time_axis(indent: usize, cols: usize, secs_per_col: f64) -> String {
             col += 1;
             continue;
         }
-        let label = format!("{}", ((col + 1) as f64 * secs_per_col).round());
+        let label = format!("{}", ((col + 1) as f64 * per_col).round());
         col += label.chars().count();
         out.push_str(&label);
     }
@@ -126,11 +126,10 @@ mod tests {
 
     #[test]
     fn axis_marks_every_tenth_column() {
-        let axis = time_axis(2, 25, 1.0);
         assert_eq!(
-            axis,
+            axis(2, 25, 1.0),
             format!("  {}10{}20{}", " ".repeat(9), " ".repeat(8), "    ")
         );
-        assert_eq!(time_axis(0, 10, 2.5), format!("{}25", " ".repeat(9)));
+        assert_eq!(axis(0, 10, 2.5), format!("{}25", " ".repeat(9)));
     }
 }

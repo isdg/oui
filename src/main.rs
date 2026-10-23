@@ -1,6 +1,7 @@
 //! oui — the binary: CLI, terminal and the event loop over the two screens.
 
 use std::fs;
+use std::io::IsTerminal;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -305,7 +306,8 @@ fn stats(
             records.iter().flat_map(|r| r.words.iter().cloned()).collect();
         Layout::detect(&words)
     });
-    print!("{}", summary::render(&records, layout));
+    let colour = std::io::stdout().is_terminal();
+    print!("{}", summary::render(&records, layout, colour));
     Ok(())
 }
 

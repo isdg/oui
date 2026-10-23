@@ -157,33 +157,34 @@ impl Measure {
         }
     }
 
-    pub fn legend(self) -> &'static str {
+    /// What each of the five levels means, best first.
+    pub fn steps(self) -> [&'static str; 5] {
         match self {
-            Measure::Errors => "·  clean   ░ <5%   ▒ <10%   ▓ <20%   █ ≥20%",
-            Measure::Speed => "·  <150ms   ░ <200   ▒ <250   ▓ <350   █ ≥350",
+            Measure::Errors => ["clean", "<5%", "<10%", "<20%", "≥20%"],
+            Measure::Speed => ["<150ms", "<200", "<250", "<350", "≥350"],
         }
     }
 
-    /// The shade for a key; blank when there is nothing to measure.
-    pub fn symbol(self, t: &Tally) -> char {
-        match self {
-            Measure::Errors if t.attempts() == 0 => ' ',
+    /// Level 0 (best) to 4 (worst); `None` when there is nothing to measure.
+    pub fn level(self, t: &Tally) -> Option<usize> {
+        let level = match self {
+            Measure::Errors if t.attempts() == 0 => return None,
             Measure::Errors => match t.miss_rate() {
-                0.0 => '·',
-                r if r < 0.05 => '░',
-                r if r < 0.10 => '▒',
-                r if r < 0.20 => '▓',
-                _ => '█',
+                0.0 => 0,
+                r if r < 0.05 => 1,
+                r if r < 0.10 => 2,
+                r if r < 0.20 => 3,
+                _ => 4,
             },
-            Measure::Speed => match t.mean_latency() {
-                None => ' ',
-                Some(d) if d < ms(150) => '·',
-                Some(d) if d < ms(200) => '░',
-                Some(d) if d < ms(250) => '▒',
-                Some(d) if d < ms(350) => '▓',
-                Some(_) => '█',
+            Measure::Speed => match t.mean_latency()? {
+                d if d < ms(150) => 0,
+                d if d < ms(200) => 1,
+                d if d < ms(250) => 2,
+                d if d < ms(350) => 3,
+                _ => 4,
             },
-        }
+        };
+        Some(level)
     }
 }
 
@@ -191,30 +192,94 @@ fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-/// The heatmap as text: each row of key labels, three columns per key, with
-/// its row of shades beneath, then the space bar.
-pub fn grid(layout: Layout, heat: &Heat, measure: Measure) -> Vec<String> {
-    let mut lines = Vec::new();
-    for (row, keys) in layout.rows().iter().enumerate() {
-        let indent = " ".repeat(STAGGER[row]);
-        let labels = keys.iter().map(|k| format!("{:>3}", label(k)));
-        lines.push(format!("{indent}{}", labels.collect::<String>()));
-        let shades =
-            heat.rows[row].iter().map(|t| format!("{:>3}", measure.symbol(t)));
-        lines.push(
-            format!("{indent}{}", shades.collect::<String>())
-                .trim_end()
-                .to_string(),
-        );
-    }
-    let pad = " ".repeat(17);
-    lines.push(format!("{pad}space"));
-    lines.push(
-        format!("{pad}  {}", measure.symbol(&heat.space))
-            .trim_end()
-            .to_string(),
-    );
-    lines
+/// `plc`'s shades, best to worst: the heatmap where colour is unavailable.
+pub const SHADES: [char; 5] = ['·', '░', '▒', '▓', '█'];
+
+/// Tile colours, best to worst, as 256-colour (background, foreground)
+/// pairs; each foreground is picked to keep the label readable.
+pub const TINTS: [(u8, u8); 5] =
+    [(22, 255), (58, 255), (136, 16), (166, 16), (160, 255)];
+
+/// A key as drawn: its padded label and the level it is tinted by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tile {
+    pub text: String,
+    pub level: Option<usize>,
+}
+
+/// The heatmap as one row of tiles per keyboard row, each with its indent,
+/// then the space bar.
+pub fn tiles(
+    layout: Layout,
+    heat: &Heat,
+    measure: Measure,
+) -> Vec<(usize, Vec<Tile>)> {
+    let mut rows: Vec<(usize, Vec<Tile>)> = layout
+        .rows()
+        .iter()
+        .zip(&heat.rows)
+        .enumerate()
+        .map(|(row, (keys, tallies))| {
+            let tile = |(key, t): (&&str, &Tally)| Tile {
+                text: format!(" {} ", label(key)),
+                level: measure.level(t),
+            };
+            (STAGGER[row], keys.iter().zip(tallies).map(tile).collect())
+        })
+        .collect();
+    let space = Tile {
+        text: format!("{:^17}", "space"),
+        level: measure.level(&heat.space),
+    };
+    rows.push((STAGGER[3] + 6, vec![space]));
+    rows
+}
+
+/// The legend as tiles, one per level.
+pub fn legend(measure: Measure) -> Vec<Tile> {
+    let steps = measure.steps().into_iter().enumerate();
+    steps
+        .map(|(i, step)| Tile { text: format!(" {step} "), level: Some(i) })
+        .collect()
+}
+
+/// The legend without colour: each level's shade and meaning.
+pub fn plain_legend(measure: Measure) -> String {
+    let steps = SHADES.iter().zip(measure.steps());
+    let steps: Vec<String> =
+        steps.map(|(s, step)| format!("{s} {step}")).collect();
+    steps.join("   ")
+}
+
+/// Tiles as plain text: each label followed by its shade.
+pub fn plain(rows: &[(usize, Vec<Tile>)]) -> Vec<String> {
+    let tile = |t: &Tile| {
+        let width = t.text.chars().count();
+        let shade = t.level.map_or(' ', |l| SHADES[l]);
+        let text = format!("{}{shade}", t.text.trim_end());
+        format!("{text:<width$}")
+    };
+    let row = |(indent, tiles): &(usize, Vec<Tile>)| {
+        let row: String = tiles.iter().map(tile).collect();
+        format!("{}{row}", " ".repeat(*indent)).trim_end().to_string()
+    };
+    rows.iter().map(row).collect()
+}
+
+/// Tiles as ANSI 256-colour text; untyped keys are dimmed.
+pub fn ansi(rows: &[(usize, Vec<Tile>)]) -> Vec<String> {
+    let tile = |t: &Tile| match t.level {
+        Some(l) => {
+            let (bg, fg) = TINTS[l];
+            format!("\x1b[48;5;{bg};38;5;{fg}m{}\x1b[0m", t.text)
+        }
+        None => format!("\x1b[2m{}\x1b[0m", t.text),
+    };
+    let row = |(indent, tiles): &(usize, Vec<Tile>)| {
+        let row: String = tiles.iter().map(tile).collect();
+        format!("{}{row}", " ".repeat(*indent))
+    };
+    rows.iter().map(row).collect()
 }
 
 fn label(key: &str) -> char {
@@ -274,10 +339,10 @@ mod tests {
     }
 
     #[test]
-    fn jcuken_grid_labels_cyrillic_in_capitals() {
+    fn jcuken_tiles_label_cyrillic_in_capitals() {
         let heat = heat(Layout::Jcuken, &BTreeMap::new());
-        let lines = grid(Layout::Jcuken, &heat, Measure::Errors);
-        assert!(lines[2].starts_with("    Й  Ц  У  К  Е  Н"));
+        let lines = plain(&tiles(Layout::Jcuken, &heat, Measure::Errors));
+        assert!(lines[1].starts_with("   Й  Ц  У  К  Е  Н"), "{lines:?}");
     }
 
     #[test]
@@ -299,40 +364,66 @@ mod tests {
     }
 
     #[test]
-    fn error_shades_follow_thresholds() {
-        let shade = |h, m| Measure::Errors.symbol(&tally(h, m));
+    fn error_levels_follow_thresholds() {
+        let level = |h, m| Measure::Errors.level(&tally(h, m));
         assert_eq!(
-            [shade(0, 0), shade(9, 0), shade(99, 1), shade(93, 7)],
-            [' ', '·', '░', '▒']
+            [level(0, 0), level(9, 0), level(99, 1), level(93, 7)],
+            [None, Some(0), Some(1), Some(2)]
         );
-        assert_eq!([shade(85, 15), shade(1, 1)], ['▓', '█']);
+        assert_eq!([level(85, 15), level(1, 1)], [Some(3), Some(4)]);
     }
 
     #[test]
-    fn speed_shades_use_mean_latency() {
+    fn speed_levels_use_mean_latency() {
         let timed = |n: u64| Tally {
             hits: 2,
             timed: 2,
             latency: ms(n * 2),
             ..Tally::default()
         };
-        let shade = |n| Measure::Speed.symbol(&timed(n));
-        assert_eq!(Measure::Speed.symbol(&tally(4, 0)), ' ');
+        let level = |n| Measure::Speed.level(&timed(n));
+        assert_eq!(Measure::Speed.level(&tally(4, 0)), None);
         assert_eq!(
-            [shade(100), shade(180), shade(220), shade(300), shade(400)],
-            ['·', '░', '▒', '▓', '█']
+            [level(100), level(180), level(220), level(300), level(400)],
+            [0, 1, 2, 3, 4].map(Some)
         );
     }
 
     #[test]
-    fn grid_puts_each_shade_under_its_key() {
+    fn one_tile_row_per_keyboard_row_then_the_space_bar() {
         let keys = BTreeMap::from([('q', tally(1, 0)), ('w', tally(0, 1))]);
-        let lines =
-            grid(Layout::Qwerty, &heat(Layout::Qwerty, &keys), Measure::Errors);
-        assert_eq!(lines.len(), 10);
-        assert!(lines[2].starts_with("    Q  W  E"));
-        assert_eq!(lines[3], "    ·  █");
-        assert_eq!(lines[1], "");
-        assert_eq!(lines[8].trim(), "space");
+        let heat = heat(Layout::Qwerty, &keys);
+        let rows = tiles(Layout::Qwerty, &heat, Measure::Errors);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[1].1[0], Tile { text: " Q ".into(), level: Some(0) });
+        assert_eq!(rows[1].1[1].level, Some(4));
+        assert_eq!(rows[1].1[2].level, None, "e never typed");
+        assert_eq!(rows[4].1[0].text.trim(), "space");
+    }
+
+    #[test]
+    fn plain_tiles_carry_their_shade_after_the_label() {
+        let keys = BTreeMap::from([('q', tally(1, 0)), ('w', tally(0, 1))]);
+        let heat = heat(Layout::Qwerty, &keys);
+        let lines = plain(&tiles(Layout::Qwerty, &heat, Measure::Errors));
+        assert!(lines[1].starts_with("   Q· W█ E  R "), "{lines:?}");
+        assert_eq!(lines[4].trim(), "space");
+    }
+
+    #[test]
+    fn ansi_tiles_tint_typed_keys_and_dim_the_rest() {
+        let keys = BTreeMap::from([('q', tally(0, 1))]);
+        let heat = heat(Layout::Qwerty, &keys);
+        let lines = ansi(&tiles(Layout::Qwerty, &heat, Measure::Errors));
+        assert!(lines[1].starts_with("  \x1b[48;5;160;38;5;255m Q \x1b[0m"));
+        assert!(lines[1].contains("\x1b[2m W \x1b[0m"));
+    }
+
+    #[test]
+    fn legend_tiles_span_every_level() {
+        let legend = legend(Measure::Errors);
+        let levels: Vec<_> = legend.iter().map(|t| t.level).collect();
+        assert_eq!(levels, [0, 1, 2, 3, 4].map(Some));
+        assert_eq!(legend[0].text, " clean ");
     }
 }

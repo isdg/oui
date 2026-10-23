@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use crate::history::Record;
-use crate::keyboard::{Layout, Measure};
+use crate::keyboard::{self, Layout, Measure};
 use crate::plot;
 use crate::stats::{self, Report};
 use crate::ui::results;
@@ -16,7 +16,8 @@ const PLOT_ROWS: usize = 8;
 /// Columns each ranking takes when printed side by side.
 const RANKING_WIDTH: usize = 24;
 
-pub fn render(records: &[Record], layout: Layout) -> String {
+/// The summary; `colour` tints the heatmaps with ANSI, else shades them.
+pub fn render(records: &[Record], layout: Layout, colour: bool) -> String {
     let reports: Vec<Report> = records.iter().map(Record::report).collect();
     let all = stats::combine(&reports);
     let wpms: Vec<f64> =
@@ -56,8 +57,8 @@ pub fn render(records: &[Record], layout: Layout) -> String {
     out.push_str(&wpm_plot(&wpms));
     for measure in [Measure::Errors, Measure::Speed] {
         out.push('\n');
-        for line in results::keyboard_lines(&all, layout, measure) {
-            let _ = writeln!(out, "{}", format!("   {line}").trim_end());
+        for line in heatmap(&all, layout, measure, colour) {
+            let _ = writeln!(out, "{}", line.trim_end());
         }
     }
     out.push('\n');
@@ -89,6 +90,28 @@ fn wpm_plot(wpms: &[f64]) -> String {
     let per_col = wpms.len() as f64 / values.len() as f64;
     let axis = plot::axis(label + 2, values.len(), per_col);
     let _ = writeln!(out, "{}", format!("     {axis}").trim_end());
+    out
+}
+
+fn heatmap(
+    r: &Report,
+    layout: Layout,
+    measure: Measure,
+    colour: bool,
+) -> Vec<String> {
+    let heat = keyboard::heat(layout, &r.keys);
+    let tiles = keyboard::tiles(layout, &heat, measure);
+    let (rows, legend) = if colour {
+        let legend = keyboard::ansi(&[(0, keyboard::legend(measure))]);
+        (keyboard::ansi(&tiles), legend.concat())
+    } else {
+        (keyboard::plain(&tiles), keyboard::plain_legend(measure))
+    };
+    let mut out =
+        vec![format!("          keyboard — {}", measure.name()), String::new()];
+    out.extend(rows.into_iter().map(|row| format!("     {row}")));
+    out.push(String::new());
+    out.push(format!("     {legend}"));
     out
 }
 
@@ -145,7 +168,7 @@ mod tests {
             record("ab cd", "ab cd", "2026-10-23T09:00:00+02:00"),
             record("ab cd", "ax", "2026-10-24T09:00:00+02:00"),
         ];
-        let out = render(&records, Layout::Qwerty);
+        let out = render(&records, Layout::Qwerty, false);
         assert!(out.contains("Tests        : 2   (1 completed)"), "{out}");
         assert!(out.contains("First / last : 2026-10-23 / 2026-10-24"));
         assert!(out.contains("Accuracy     : 85.7%  (6/7 keys)"));
@@ -159,7 +182,18 @@ mod tests {
     #[test]
     fn plot_without_completed_tests_says_so() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
-        assert!(render(&records, Layout::Qwerty).contains("(no data)"));
+        assert!(render(&records, Layout::Qwerty, false).contains("(no data)"));
+    }
+
+    #[test]
+    fn heatmaps_are_one_tile_row_per_key_row() {
+        let records = [record("ab", "ab", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, Layout::Qwerty, false);
+        assert!(out.contains("       A· S  D"), "{out}");
+        assert!(out.contains("· clean   ░ <5%"));
+        assert!(!out.contains('\x1b'), "no ANSI unless asked");
+        assert!(render(&records, Layout::Qwerty, true)
+            .contains("\x1b[48;5;22;38;5;255m A \x1b[0m"));
     }
 
     #[test]

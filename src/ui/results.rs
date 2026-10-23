@@ -2,8 +2,8 @@
 //! heatmap beside the rankings of weak keys and bigrams.
 
 use ratatui::layout::{Constraint, Layout as Split};
-use ratatui::style::Stylize;
-use ratatui::text::Line;
+use ratatui::style::{Color, Style, Stylize};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
@@ -53,7 +53,7 @@ pub fn draw(
         chart,
     );
     let heat = keyboard_lines(report, layout, measure);
-    frame.render_widget(Paragraph::new(lines(heat)), board);
+    frame.render_widget(Paragraph::new(heat), board);
     for (area, ranking) in [
         (keys, worst_keys(report)),
         (typos, top_typos(report)),
@@ -105,22 +105,36 @@ fn wpm_plot(r: &Report, width: u16) -> Vec<String> {
     out
 }
 
-pub fn keyboard_lines(
+/// The heatmap as tinted key tiles under a title, with its legend.
+fn keyboard_lines(
     r: &Report,
     layout: Layout,
     measure: Measure,
-) -> Vec<String> {
+) -> Vec<Line<'static>> {
     let heat = keyboard::heat(layout, &r.keys);
     let title = format!("  keyboard — {}", measure.name());
-    let mut out = vec![title, String::new()];
-    out.extend(
-        keyboard::grid(layout, &heat, measure)
-            .into_iter()
-            .map(|l| format!("  {l}")),
-    );
-    out.push(String::new());
-    out.push(format!("  {}", measure.legend()));
+    let mut out = vec![Line::from(title), Line::default()];
+    for (indent, tiles) in keyboard::tiles(layout, &heat, measure) {
+        out.push(tile_line(2 + indent, &tiles));
+    }
+    out.push(Line::default());
+    out.push(tile_line(2, &keyboard::legend(measure)));
     out
+}
+
+fn tile_line(indent: usize, tiles: &[keyboard::Tile]) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ".repeat(indent))];
+    for tile in tiles {
+        let style = match tile.level {
+            Some(l) => {
+                let (bg, fg) = keyboard::TINTS[l];
+                Style::new().bg(Color::Indexed(bg)).fg(Color::Indexed(fg))
+            }
+            None => Style::new().dim(),
+        };
+        spans.push(Span::styled(tile.text.clone(), style));
+    }
+    Line::from(spans)
 }
 
 pub fn worst_keys(r: &Report) -> Vec<String> {

@@ -1,5 +1,10 @@
-//! Word sources: the bundled lists and texts typed in order.
+//! Word sources: the bundled lists, passages of real prose, and texts typed
+//! in order.
 
+use std::fs;
+use std::path::Path;
+
+use anyhow::{Context, Result};
 use fastrand::Rng;
 
 /// Bundled word lists, keyed by the name `--language` takes.
@@ -13,8 +18,73 @@ pub fn language(name: &str) -> Option<Vec<String>> {
     LANGUAGES.iter().find(|(n, _)| *n == name).map(|(_, text)| split(text))
 }
 
+/// Bundled passages for `--mode text`, separated by blank lines: openings
+/// of public-domain classics.
+pub const TEXTS: [(&str, &str); 3] = [
+    ("english", include_str!("../resources/texts/english.txt")),
+    ("french", include_str!("../resources/texts/french.txt")),
+    ("russian", include_str!("../resources/texts/russian.txt")),
+];
+
 pub fn split(text: &str) -> Vec<String> {
-    text.split_whitespace().map(str::to_owned).collect()
+    normalise(text).split_whitespace().map(str::to_owned).collect()
+}
+
+/// Typographic characters folded into what a keyboard types directly.
+pub fn normalise(text: &str) -> String {
+    let fold = |c| match c {
+        '‘' | '’' | '‚' | '′' => '\'',
+        '“' | '”' | '„' | '«' | '»' | '″' => '"',
+        '–' | '—' | '―' | '−' => '-',
+        '\u{a0}' | '\u{202f}' | '\u{2009}' => ' ',
+        c => c,
+    };
+    text.chars().map(fold).collect::<String>().replace('…', "...")
+}
+
+/// The passages of `text`: its blocks between blank lines, as words.
+pub fn passages(text: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    let mut block = String::new();
+    for line in text.lines().chain([""]) {
+        if line.trim().is_empty() {
+            let words = split(&block);
+            if !words.is_empty() {
+                out.push(words);
+            }
+            block.clear();
+        } else {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+    out
+}
+
+/// Passages for `language`: the bundled ones, then those of every `.txt`
+/// file in `dir/<language>/`, in name order.
+pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Vec<String>>> {
+    let bundled = TEXTS.iter().find(|(n, _)| *n == language);
+    let mut out = bundled.map_or_else(Vec::new, |(_, text)| passages(text));
+    let dir = dir.join(language);
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading {}", dir.display()))
+        }
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+        .collect();
+    files.sort();
+    for file in files {
+        let text = fs::read_to_string(&file)
+            .with_context(|| format!("reading {}", file.display()))?;
+        out.extend(passages(&text));
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,27 +93,57 @@ pub enum Source {
     Random(Vec<String>),
     /// A text typed in order, starting over once exhausted.
     Text(Vec<String>),
+    /// Passages of prose, flattened; `starts` indexes each one's first word.
+    Passages { words: Vec<String>, starts: Vec<usize> },
 }
 
 impl Source {
+    pub fn passages(passages: Vec<Vec<String>>) -> Self {
+        let mut starts = Vec::with_capacity(passages.len());
+        let mut words = Vec::new();
+        for passage in passages {
+            starts.push(words.len());
+            words.extend(passage);
+        }
+        Source::Passages { words, starts }
+    }
+
     pub fn words(&self) -> &[String] {
         match self {
-            Source::Random(words) | Source::Text(words) => words,
+            Source::Random(words)
+            | Source::Text(words)
+            | Source::Passages { words, .. } => words,
         }
     }
 
-    /// `n` words; a [`Source::Text`] continues from word `from`.
+    /// The word a new test starts on: a random passage's first, else 0.
+    pub fn start(&self, rng: &mut Rng) -> usize {
+        match self {
+            Source::Passages { starts, .. } if !starts.is_empty() => {
+                starts[rng.usize(..starts.len())]
+            }
+            _ => 0,
+        }
+    }
+
+    /// Words in the passage starting at word `start`.
+    pub fn passage_len(&self, start: usize) -> Option<usize> {
+        let Source::Passages { words, starts } = self else { return None };
+        let i = starts.iter().position(|&s| s == start)?;
+        Some(starts.get(i + 1).unwrap_or(&words.len()) - start)
+    }
+
+    /// `n` words; texts and passages continue from word `from`, wrapping.
     pub fn take(&self, from: usize, n: usize, rng: &mut Rng) -> Vec<String> {
         match self {
             Source::Random(pool) => sample(pool, n, rng),
-            Source::Text(text) if text.is_empty() => Vec::new(),
-            Source::Text(text) => text
-                .iter()
-                .cycle()
-                .skip(from % text.len())
-                .take(n)
-                .cloned()
-                .collect(),
+            Source::Text(text) | Source::Passages { words: text, .. } => {
+                if text.is_empty() {
+                    return Vec::new();
+                }
+                let cycle = text.iter().cycle().skip(from % text.len());
+                cycle.take(n).cloned().collect()
+            }
         }
     }
 }
@@ -95,6 +195,73 @@ fn score(word: &str, targets: &[(char, char)]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typography_folds_to_typeable_ascii() {
+        let text = "«Je m’endors» — dit-il… “ok”";
+        assert_eq!(normalise(text), "\"Je m'endors\" - dit-il... \"ok\"");
+        assert_eq!(split("a\u{a0}b"), ["a", "b"]);
+    }
+
+    #[test]
+    fn passages_split_on_blank_lines() {
+        let text = "one two\nthree\n\n\n  \nfour\r\n\r\nfive six\n";
+        let words = |p: &[&str]| owned(p);
+        assert_eq!(
+            passages(text),
+            [
+                words(&["one", "two", "three"]),
+                words(&["four"]),
+                words(&["five", "six"])
+            ]
+        );
+    }
+
+    #[test]
+    fn every_language_has_bundled_passages() {
+        for (name, text) in TEXTS {
+            let n = passages(text).len();
+            assert!(n >= 12, "{name} has {n} passages");
+            assert!(LANGUAGES.iter().any(|(l, _)| *l == name));
+        }
+    }
+
+    #[test]
+    fn user_texts_extend_the_bundled_ones() {
+        let dir = std::env::temp_dir()
+            .join(format!("oui-texts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("french")).unwrap();
+        fs::write(dir.join("french/b.txt"), "deux\n\ntrois").unwrap();
+        fs::write(dir.join("french/a.txt"), "un").unwrap();
+        fs::write(dir.join("french/notes.md"), "ignored").unwrap();
+        let bundled = passages(TEXTS[1].1).len();
+        let all = load_passages("french", &dir).unwrap();
+        assert_eq!(all.len(), bundled + 3);
+        assert_eq!(
+            all[bundled..],
+            [owned(&["un"]), owned(&["deux"]), owned(&["trois"])]
+        );
+        assert_eq!(load_passages("german", &dir).unwrap().len(), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn passages_start_on_a_passage_and_know_its_length() {
+        let source =
+            Source::passages(vec![owned(&["a", "b"]), owned(&["c", "d", "e"])]);
+        let mut rng = Rng::with_seed(5);
+        for _ in 0..20 {
+            let start = source.start(&mut rng);
+            assert!(start == 0 || start == 2);
+        }
+        assert_eq!(
+            (source.passage_len(0), source.passage_len(2)),
+            (Some(2), Some(3))
+        );
+        assert_eq!(source.passage_len(1), None);
+        assert_eq!(source.take(2, 4, &mut rng), owned(&["c", "d", "e", "a"]));
+    }
 
     #[test]
     fn score_counts_inner_and_boundary_bigrams() {

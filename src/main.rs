@@ -3,11 +3,11 @@
 use std::fs;
 use std::io::IsTerminal;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -64,9 +64,13 @@ enum Cmd {
 struct TestArgs {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
-    /// Bundled word list to draw from: english, french or russian.
+    /// Language to type: english, french or russian, or any with texts in
+    /// ~/.oui/texts/<language>/ for --mode text.
     #[arg(short, long, default_value = "english", conflicts_with = "file")]
     language: String,
+    /// Random words (default), or passages of real prose.
+    #[arg(short, long, value_enum, conflicts_with = "file")]
+    mode: Option<Mode>,
     /// Extras mixed into random words, comma-separated: punctuation,
     /// numbers, capitals, symbols (or p, n, c, s).
     #[arg(
@@ -89,10 +93,20 @@ struct TestArgs {
     layout: Option<Layout>,
 }
 
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Random words from the language's list.
+    Words,
+    /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
+    Text,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Limit {
     Words(usize),
     Time(Duration),
+    /// One passage of a text-mode source, however long.
+    Passage,
 }
 
 enum Screen {
@@ -107,7 +121,9 @@ struct Feed {
     drill: Vec<(char, char)>,
     /// The `--with` extras; drills are left plain so they hit their bigrams.
     decorator: Decorator,
-    /// Words taken from the source for the current session.
+    /// Where the current session starts in the source, and how many words
+    /// it has taken from there.
+    start: usize,
     drawn: usize,
     rng: Rng,
 }
@@ -118,7 +134,8 @@ impl Feed {
             let pool = self.source.words();
             return words::practice(pool, &self.drill, n, &mut self.rng);
         }
-        let words = self.source.take(self.drawn, n, &mut self.rng);
+        let from = self.start + self.drawn;
+        let words = self.source.take(from, n, &mut self.rng);
         self.drawn += words.len();
         self.decorator.apply(words, &mut self.rng)
     }
@@ -162,6 +179,7 @@ impl App {
                 source,
                 drill: Vec::new(),
                 decorator: Decorator::new(&extras),
+                start: 0,
                 drawn: 0,
                 rng: Rng::new(),
             },
@@ -181,8 +199,13 @@ impl App {
     fn restart(&mut self) {
         self.feed.drawn = 0;
         self.feed.decorator.reset();
+        self.feed.start = self.feed.source.start(&mut self.feed.rng);
         let session = match self.limit {
             Limit::Words(n) => Session::new(self.feed.take(n), None),
+            Limit::Passage => {
+                let n = self.feed.source.passage_len(self.feed.start);
+                Session::new(self.feed.take(n.unwrap_or(DEFAULT_WORDS)), None)
+            }
             Limit::Time(limit) => {
                 Session::new(self.feed.take(BATCH), Some(limit))
             }
@@ -321,7 +344,8 @@ fn main() -> Result<()> {
             stats(&store, last, source.as_deref(), layout)
         }
         None => {
-            let app = App::new(setup(&cli.test)?, Some(store));
+            let texts = store.dir().join("texts");
+            let app = App::new(setup(&cli.test, &texts)?, Some(store));
             ratatui::run(|terminal| run(terminal, app))
         }
     }
@@ -373,27 +397,34 @@ fn select(
     records
 }
 
-fn setup(cli: &TestArgs) -> Result<Setup> {
-    let (source, name) = source(cli)?;
+/// The run's settings; `texts` is the directory of the user's own passages.
+fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
+    let (source, name) = source(cli, texts)?;
     let limit = limit(cli, &source);
+    if matches!(source, Source::Passages { .. }) && !cli.with.is_empty() {
+        bail!("--with mixes extras into random words, not --mode text");
+    }
     let mut extras = cli.with.clone();
     extras.sort();
     extras.dedup();
     let with: Vec<String> =
         extras.iter().map(|e| e.name().to_string()).collect();
+    let mode = match source {
+        Source::Random(_) => "words",
+        Source::Text(_) => "file",
+        Source::Passages { .. } => "text",
+    };
     let what = match with.as_slice() {
+        [] if mode == "text" => format!("{name} text"),
         [] => name.clone(),
         with => format!("{name} with {}", with.join(", ")),
     };
     let title = match limit {
         Limit::Words(n) => format!("{what} · {n} words"),
         Limit::Time(d) => format!("{what} · {}s", d.as_secs()),
+        Limit::Passage => format!("{what} · one passage"),
     };
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
-    let mode = match source {
-        Source::Random(_) => "words",
-        Source::Text(_) => "file",
-    };
     let meta = Meta {
         source: name,
         mode: mode.to_string(),
@@ -419,7 +450,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
 }
 
 /// The words to type and a name for them.
-fn source(cli: &TestArgs) -> Result<(Source, String)> {
+fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
     if let Some(path) = &cli.file {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -429,6 +460,18 @@ fn source(cli: &TestArgs) -> Result<(Source, String)> {
         }
         let name = path.file_name().unwrap_or(path.as_os_str());
         return Ok((Source::Text(words), name.to_string_lossy().into_owned()));
+    }
+    let language = cli.language.clone();
+    if cli.mode == Some(Mode::Text) {
+        let passages = words::load_passages(&language, texts)?;
+        if passages.is_empty() {
+            let dir = texts.join(&language);
+            bail!(
+                "no texts for '{language}' (add .txt files to {})",
+                dir.display()
+            );
+        }
+        return Ok((Source::passages(passages), language));
     }
     let Some(words) = words::language(&cli.language) else {
         let known: Vec<&str> =
@@ -450,6 +493,7 @@ fn limit(cli: &TestArgs, source: &Source) -> Limit {
         (Some(n), _) => Limit::Words(n.get()),
         (None, Source::Text(text)) => Limit::Words(text.len()),
         (None, Source::Random(_)) => Limit::Words(DEFAULT_WORDS),
+        (None, Source::Passages { .. }) => Limit::Passage,
     }
 }
 
@@ -463,6 +507,10 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) -> bool {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), Instant::now())
+    }
+
+    fn no_texts() -> PathBuf {
+        PathBuf::from("/nonexistent/oui-texts")
     }
 
     fn words(text: &str) -> Source {
@@ -506,7 +554,7 @@ mod tests {
     #[test]
     fn defaults_to_fifty_english_words() {
         let cli = cli(&[]);
-        let (source, name) = source(&cli).unwrap();
+        let (source, name) = source(&cli, &no_texts()).unwrap();
         assert_eq!(name, "english");
         assert_eq!(limit(&cli, &source), Limit::Words(50));
         assert_eq!(cli.layout, None);
@@ -540,7 +588,7 @@ mod tests {
     #[test]
     fn extras_parse_as_one_list_and_name_the_test() {
         let args = cli(&["-W", "n,p", "--with", "p,symbols", "-w", "9"]);
-        let setup = setup(&args).unwrap();
+        let setup = setup(&args, &no_texts()).unwrap();
         assert_eq!(setup.meta.with, ["punctuation", "numbers", "symbols"]);
         assert_eq!(
             setup.title,
@@ -548,6 +596,32 @@ mod tests {
         );
         assert!(Cli::try_parse_from(["oui", "-W", "x"]).is_err());
         assert!(Cli::try_parse_from(["oui", "notes.txt", "-W", "p"]).is_err());
+    }
+
+    #[test]
+    fn text_mode_types_one_whole_passage() {
+        let args = cli(&["-m", "text", "-l", "french"]);
+        let setup = setup(&args, &no_texts()).unwrap();
+        assert_eq!(setup.title, "french text · one passage");
+        assert_eq!(setup.meta.mode, "text");
+        let app = App::new(setup, None);
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        let len = app.feed.source.passage_len(app.feed.start);
+        assert_eq!(Some(session.words().len()), len);
+        assert!(session.words()[0].starts_with(char::is_uppercase));
+    }
+
+    #[test]
+    fn text_mode_refuses_extras_and_unknown_texts() {
+        let err = |args: &[&str]| {
+            setup(&cli(args), &no_texts()).err().unwrap().to_string()
+        };
+        assert!(err(&["-m", "text", "-W", "p"]).starts_with("--with mixes"));
+        assert!(err(&["-m", "text", "-l", "german"])
+            .starts_with("no texts for 'german'"));
+        assert!(
+            Cli::try_parse_from(["oui", "notes.txt", "-m", "text"]).is_err()
+        );
     }
 
     #[test]
@@ -592,7 +666,9 @@ mod tests {
 
     #[test]
     fn unknown_language_lists_the_bundled_ones() {
-        let err = source(&cli(&["-l", "klingon"])).unwrap_err().to_string();
+        let err = source(&cli(&["-l", "klingon"]), &no_texts())
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
             "unknown language 'klingon' (have english, french, russian)"

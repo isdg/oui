@@ -123,10 +123,12 @@ what a drill must target. Backspace is not logged; it only breaks the chain.
 
 ### Heatmap
 
-Keyboard layouts (`qwerty`, `azerty`) are rows of keys, each key the set of
+Keyboard layouts (`qwerty`, `jcuken`) are rows of keys, each key the set of
 characters it produces. A character is placed on its key directly, through
 its lowercase form, or through its unaccented base letter (`ê` → `e` on
-QWERTY), and tallies are summed per physical key.
+QWERTY), and tallies are summed per physical key. Without `-k`, the layout
+is the one that places the most characters of the test, so Russian text
+gets ЙЦУКЕН and everything else QWERTY.
 
 ### Drill
 
@@ -154,23 +156,13 @@ screen is tested against ratatui's `TestBackend`.
 ## CLI
 
 ```
-oui [FILE] [-l LANG] [-w N | -t SECS] [-k qwerty|azerty]
+oui [FILE] [-l LANG] [-w N | -t SECS] [-k qwerty|jcuken]
 ```
 
 `FILE` types a text in order instead of random words. `-w` defaults to 50
 random words, or the whole text for a file; `-t` switches to a timed test.
 
-## Delivery
+## Later
 
-A stack of small PRs, each building and tested on its own:
-
-1. `feat/core/words` — crate scaffold and word sources.
-2. `feat/core/session` — the typing engine and keystroke log.
-3. `feat/core/stats` — the `Report` and its rankings.
-4. `feat/ui/plots` — line chart and keyboard heatmap.
-5. `feat/ui/results` — the results screen.
-6. `feat/ui/typing` — the typing screen.
-7. `feat/app/cli` — CLI and event loop; first usable build.
-8. `feat/core/practice` — weak-bigram drill.
-
-Later: run history with trends, Mac AZERTY and other layouts, a config file.
+Run history with trends, more layouts (Mac variants, Dvorak, Colemak), a
+config file.

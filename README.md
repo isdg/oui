@@ -151,8 +151,8 @@ author, work and year; old French spellings are left out.
 
 | Language | Words | Passages | Works |
 |---|---|---|---|
-| English | 5,000 | 1,000 | 139 |
-| French | 5,000 | 1,000 | 116 |
+| English | 5,000 | 2,000 | 139 |
+| French | 5,000 | 2,000 | 116 |
 | Russian | 1,000 | 149 | 55 |
 
 ## Files

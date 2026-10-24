@@ -172,11 +172,12 @@ random words, or the whole text for a file; `-t` switches to a timed test.
   raw keystrokes, so stats are recomputed rather than trusted. Newer or
   unreadable lines are skipped. A cited passage's source is kept too, as an
   optional field, so older readers and records are unaffected.
-- `oui stats` combines the records: a `plc stat`-style block, WPM per test,
-  both heatmaps over every keystroke, the rankings. Drills rank weak bigrams
-  over the last 20 tests of the same language.
-- `--geometry` sums the key and bigram tallies per finger, row and hand
-  move instead. Fingers follow touch typing on the ANSI board, keyed by
+- `oui stats` combines the records: a `plc stat`-style block, WPM per test
+  and the recent texts; `--detailed` adds both heatmaps over every
+  keystroke and the rankings. Drills rank weak bigrams over the last 20
+  tests of the same language.
+- `--geometry` adds the key and bigram tallies summed per finger, row and
+  hand move. Fingers follow touch typing on the ANSI board, keyed by
   physical position, so every layout shares them. Rhythm pools squared
   deviations from each test's own mean, so getting faster over months does
   not read as unevenness.

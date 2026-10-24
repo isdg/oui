@@ -82,10 +82,11 @@ ends: a summary plus the raw keystrokes, so any statistic can be recomputed
 later. `oui stats` reads it back:
 
 ```sh
-oui stats                     # all tests: stats, WPM per test, heatmaps
+oui stats                     # all tests: stats, WPM per test, texts
+oui stats -d                  # plus heatmaps and key and bigram rankings
 oui stats -n 20 -s russian    # the last 20 Russian tests
 oui stats --by week           # a table of weeks, WPM plotted per week
-oui stats --geometry          # fingers, rows and hand moves
+oui stats --geometry          # plus fingers, rows and hand moves
 ```
 
 `-b, --by day|week|month` groups tests by calendar period (ISO weeks, in
@@ -102,8 +103,10 @@ accurate, and what it was.
 each test, and that deviation as a share of the mean: the higher it is,
 the more uneven the typing, whatever its speed.
 
-`-g, --geometry` swaps the heatmaps and rankings for where those keys sit
-under the hands, in standard touch typing on the one board every layout
+`-d, --detailed` adds both heatmaps and the rankings of worst keys, error
+and slow bigrams and typos over every recorded keystroke.
+
+`-g, --geometry` adds where those keys sit under the hands, in standard touch typing on the one board every layout
 shares: keys, share, miss rate and mean latency per finger and per row,
 then per hand move between consecutive keys -- alternating hands, same
 hand, same finger on two keys, the same key twice, or to and from space.

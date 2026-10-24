@@ -20,7 +20,7 @@ use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
-use oui::summary::{self, Period};
+use oui::summary::{self, Period, View};
 use oui::ui;
 use oui::words::{self, Mode, Source};
 
@@ -83,8 +83,11 @@ enum Cmd {
         /// plotted per period instead of per test.
         #[arg(short, long, value_enum)]
         by: Option<Period>,
-        /// Fingers, rows and hand moves -- same-finger bigrams among them --
-        /// instead of the heatmaps and rankings.
+        /// Add the heatmaps and the key and bigram rankings.
+        #[arg(short, long)]
+        detailed: bool,
+        /// Add fingers, rows and hand moves -- same-finger bigrams among
+        /// them.
         #[arg(short, long)]
         geometry: bool,
     },
@@ -408,8 +411,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let store = Store::open()?;
     match cli.cmd {
-        Some(Cmd::Stats { last, source, layout, by, geometry }) => {
-            stats(&store, last, source.as_deref(), layout, by, geometry)
+        Some(Cmd::Stats { last, source, layout, by, detailed, geometry }) => {
+            let view = View { by, detailed, geometry, ..View::default() };
+            stats(&store, last, source.as_deref(), layout, view)
         }
         None => {
             let config = Config::load(&store.dir().join("config"))?;
@@ -426,8 +430,7 @@ fn stats(
     last: Option<NonZeroUsize>,
     source: Option<&str>,
     layout: Option<Layout>,
-    by: Option<Period>,
-    geometry: bool,
+    mut view: View,
 ) -> Result<()> {
     let history = store.load()?;
     if history.skipped > 0 {
@@ -443,13 +446,13 @@ fn stats(
         println!("no tests recorded in {}", store.history().display());
         return Ok(());
     }
-    let layout = layout.unwrap_or_else(|| {
+    view.layout = layout.unwrap_or_else(|| {
         let words: Vec<String> =
             records.iter().flat_map(|r| r.words.iter().cloned()).collect();
         Layout::detect(&words)
     });
-    let colour = std::io::stdout().is_terminal();
-    print!("{}", summary::render(&records, layout, colour, by, geometry));
+    view.colour = std::io::stdout().is_terminal();
+    print!("{}", summary::render(&records, &view));
     Ok(())
 }
 
@@ -791,14 +794,18 @@ mod tests {
                 source: Some("russian".into()),
                 layout: None,
                 by: None,
+                detailed: false,
                 geometry: false,
             })
         );
         assert!(parse(&["stats", "-w", "10"]).is_err());
         let by = parse(&["stats", "--by", "week"]).unwrap().cmd;
         assert!(matches!(by, Some(Cmd::Stats { by: Some(Period::Week), .. })));
-        let g = parse(&["stats", "-g", "--by", "day"]).unwrap().cmd;
-        assert!(matches!(g, Some(Cmd::Stats { geometry: true, .. })));
+        let g = parse(&["stats", "-dg", "--by", "day"]).unwrap().cmd;
+        assert!(matches!(
+            g,
+            Some(Cmd::Stats { detailed: true, geometry: true, .. })
+        ));
         assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
     }
 

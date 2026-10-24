@@ -85,9 +85,14 @@ impl Layout {
     /// The layout that can place the most characters of `words`; QWERTY on
     /// a tie.
     pub fn detect(words: &[String]) -> Layout {
+        let mut counts: BTreeMap<char, usize> = BTreeMap::new();
+        for c in words.iter().flat_map(|w| w.chars()) {
+            *counts.entry(c).or_default() += 1;
+        }
         let placed = |layout: Layout| {
-            let chars = words.iter().flat_map(|w| w.chars());
-            chars.filter(|&c| layout.locate(c).is_some()).count()
+            let placed =
+                counts.iter().filter(|(&c, _)| layout.locate(c).is_some());
+            placed.map(|(_, n)| n).sum::<usize>()
         };
         let layouts = [Layout::Qwerty, Layout::Jcuken];
         layouts.into_iter().rev().max_by_key(|&l| placed(l)).unwrap_or_default()

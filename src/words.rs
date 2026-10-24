@@ -251,6 +251,8 @@ fn score(word: &str, targets: &[(char, char)]) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::keyboard::Layout;
 
@@ -323,8 +325,10 @@ mod tests {
                 .any(|l| l.locate(c).is_some())
         };
         for (name, words) in lists.chain(texts) {
-            let chars = words.iter().flat_map(|w: &String| w.chars());
-            let keyless: String = chars.filter(|&c| !typeable(c)).collect();
+            let chars: BTreeSet<char> =
+                words.iter().flat_map(|w: &String| w.chars()).collect();
+            let keyless: String =
+                chars.into_iter().filter(|&c| !typeable(c)).collect();
             assert!(keyless.is_empty(), "{name}: {keyless:?}");
         }
     }

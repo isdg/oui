@@ -18,7 +18,14 @@ use crate::stats;
 /// Words either side of the cursor the slider lays out.
 const REACH: usize = 20;
 
-pub fn draw(frame: &mut Frame, s: &Session, now: Instant, title: &str) {
+/// The screen; `cite` names where the text is from, under it.
+pub fn draw(
+    frame: &mut Frame,
+    s: &Session,
+    now: Instant,
+    title: &str,
+    cite: Option<&str>,
+) {
     use Constraint::{Fill, Length};
 
     let area = frame.area().centered_horizontally(Constraint::Max(MAX_WIDTH));
@@ -34,7 +41,7 @@ pub fn draw(frame: &mut Frame, s: &Session, now: Instant, title: &str) {
     draw_header(frame, header, s, now, title);
     draw_slider(frame, slider, s);
     draw_input(frame, input, s);
-    draw_text(frame, text, s);
+    draw_text(frame, text, s, cite);
     let keys = " esc results · tab restart · ctrl-c quit";
     frame.render_widget(Line::from(keys).dim(), footer);
 }
@@ -97,8 +104,12 @@ fn draw_input(frame: &mut Frame, area: Rect, s: &Session) {
 }
 
 /// The whole text, wrapped and scrolled only as far as [`first_row`] needs.
-fn draw_text(frame: &mut Frame, area: Rect, s: &Session) {
-    let block = Block::bordered().padding(Padding::horizontal(1));
+fn draw_text(frame: &mut Frame, area: Rect, s: &Session, cite: Option<&str>) {
+    let mut block = Block::bordered().padding(Padding::horizontal(1));
+    if let Some(cite) = cite {
+        let cite = Line::from(format!(" {cite} ")).italic().right_aligned();
+        block = block.title_bottom(cite);
+    }
     let inner = block.inner(area);
     let widths: Vec<usize> =
         (0..s.words().len()).map(|i| width(s, i)).collect();
@@ -246,7 +257,8 @@ mod tests {
     #[test]
     fn slider_centres_the_cursor() {
         let s = session(&["ab", "cd", "ef"], "ab ");
-        let rows = render(40, 16, |f| draw(f, &s, Instant::now(), "english"));
+        let rows =
+            render(40, 16, |f| draw(f, &s, Instant::now(), "english", None));
         let centre = |r: &String| r.chars().nth(20) == Some('c');
         assert!(rows.iter().any(centre), "{}", rows.join("\n"));
     }
@@ -254,11 +266,22 @@ mod tests {
     #[test]
     fn screen_shows_header_input_and_text() {
         let s = session(&["ab", "cd", "ef"], "ab c");
-        let rows = render(40, 16, |f| draw(f, &s, Instant::now(), "english"));
+        let rows =
+            render(40, 16, |f| draw(f, &s, Instant::now(), "english", None));
         let screen = rows.join("\n");
         assert!(rows[0].starts_with(" oui · english"), "{screen}");
         assert!(screen.contains("┌ cd "), "input titled with the word");
         assert!(screen.contains("│ ab cd ef"), "text area");
         assert!(screen.contains("esc results"));
+        assert!(!screen.contains("Austen"));
+    }
+
+    #[test]
+    fn text_area_cites_its_source_underneath() {
+        let s = session(&["ab", "cd"], "");
+        let cite = Some("Austen, Emma (1815)");
+        let rows = render(40, 16, |f| draw(f, &s, Instant::now(), "en", cite));
+        let bottom = rows.iter().rfind(|r| r.contains('└')).unwrap();
+        assert!(bottom.ends_with("─ Austen, Emma (1815) ┘"), "{bottom}");
     }
 }

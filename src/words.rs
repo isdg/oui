@@ -27,8 +27,8 @@ pub fn language(name: &str) -> Option<Vec<String>> {
     LANGUAGES.iter().find(|(n, _)| *n == name).map(|(_, text)| split(text))
 }
 
-/// Bundled passages for `--mode text`, separated by blank lines: openings
-/// of public-domain classics.
+/// Bundled passages for `--mode text`, separated by blank lines: excerpts of
+/// public-domain classics, each cited.
 pub const TEXTS: [(&str, &str); 3] = [
     ("english", include_str!("../resources/texts/english.txt")),
     ("french", include_str!("../resources/texts/french.txt")),
@@ -51,28 +51,48 @@ pub fn normalise(text: &str) -> String {
     text.chars().map(fold).collect::<String>().replace('…', "...")
 }
 
-/// The passages of `text`: its blocks between blank lines, as words.
-pub fn passages(text: &str) -> Vec<Vec<String>> {
+/// A passage of prose, and where it is from when its text says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Passage {
+    pub words: Vec<String>,
+    pub cite: Option<String>,
+}
+
+/// The passages of `text`: its blocks between blank lines, as words. A
+/// `[[Author, Work (year)]]` line cites the passages after it, up to the
+/// next such line; `[[]]` stops citing.
+pub fn passages(text: &str) -> Vec<Passage> {
     let mut out = Vec::new();
     let mut block = String::new();
+    let mut cite = None;
     for line in text.lines().chain([""]) {
-        if line.trim().is_empty() {
-            let words = split(&block);
-            if !words.is_empty() {
-                out.push(words);
-            }
-            block.clear();
-        } else {
+        let citation = citation(line);
+        if !line.trim().is_empty() && citation.is_none() {
             block.push_str(line);
             block.push('\n');
+            continue;
+        }
+        let words = split(&block);
+        if !words.is_empty() {
+            out.push(Passage { words, cite: cite.clone() });
+        }
+        block.clear();
+        if let Some(name) = citation {
+            cite = (!name.is_empty()).then(|| name.to_string());
         }
     }
     out
 }
 
+/// The source a line naming one as `[[...]]` cites.
+fn citation(line: &str) -> Option<&str> {
+    let inner = line.trim().strip_prefix("[[")?.strip_suffix("]]")?;
+    Some(inner.trim())
+}
+
 /// Passages for `language`: the bundled ones, then those of every `.txt`
 /// file in `dir/<language>/`, in name order.
-pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Vec<String>>> {
+pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Passage>> {
     let bundled = TEXTS.iter().find(|(n, _)| *n == language);
     let mut out = bundled.map_or_else(Vec::new, |(_, text)| passages(text));
     let dir = dir.join(language);
@@ -102,19 +122,26 @@ pub enum Source {
     Random(Vec<String>),
     /// A text typed in order, starting over once exhausted.
     Text(Vec<String>),
-    /// Passages of prose, flattened; `starts` indexes each one's first word.
-    Passages { words: Vec<String>, starts: Vec<usize> },
+    /// Passages of prose, flattened; `starts` indexes each one's first word
+    /// and `cites` holds each one's source.
+    Passages {
+        words: Vec<String>,
+        starts: Vec<usize>,
+        cites: Vec<Option<String>>,
+    },
 }
 
 impl Source {
-    pub fn passages(passages: Vec<Vec<String>>) -> Self {
+    pub fn passages(passages: Vec<Passage>) -> Self {
         let mut starts = Vec::with_capacity(passages.len());
+        let mut cites = Vec::with_capacity(passages.len());
         let mut words = Vec::new();
         for passage in passages {
             starts.push(words.len());
-            words.extend(passage);
+            cites.push(passage.cite);
+            words.extend(passage.words);
         }
-        Source::Passages { words, starts }
+        Source::Passages { words, starts, cites }
     }
 
     pub fn words(&self) -> &[String] {
@@ -137,9 +164,20 @@ impl Source {
 
     /// Words in the passage starting at word `start`.
     pub fn passage_len(&self, start: usize) -> Option<usize> {
-        let Source::Passages { words, starts } = self else { return None };
+        let Source::Passages { words, starts, .. } = self else {
+            return None;
+        };
         let i = starts.iter().position(|&s| s == start)?;
         Some(starts.get(i + 1).unwrap_or(&words.len()) - start)
+    }
+
+    /// Where the passage starting at word `start` is from, if cited.
+    pub fn cite(&self, start: usize) -> Option<&str> {
+        let Source::Passages { starts, cites, .. } = self else {
+            return None;
+        };
+        let i = starts.iter().position(|&s| s == start)?;
+        cites[i].as_deref()
     }
 
     /// `n` words; texts and passages continue from word `from`, wrapping.
@@ -212,25 +250,50 @@ mod tests {
         assert_eq!(split("a\u{a0}b"), ["a", "b"]);
     }
 
+    fn uncited(words: &[&str]) -> Passage {
+        Passage { words: owned(words), cite: None }
+    }
+
+    fn cited(words: &[&str], cite: &str) -> Passage {
+        Passage { words: owned(words), cite: Some(cite.to_string()) }
+    }
+
     #[test]
     fn passages_split_on_blank_lines() {
         let text = "one two\nthree\n\n\n  \nfour\r\n\r\nfive six\n";
-        let words = |p: &[&str]| owned(p);
         assert_eq!(
             passages(text),
             [
-                words(&["one", "two", "three"]),
-                words(&["four"]),
-                words(&["five", "six"])
+                uncited(&["one", "two", "three"]),
+                uncited(&["four"]),
+                uncited(&["five", "six"])
             ]
         );
     }
 
     #[test]
-    fn every_language_has_bundled_passages() {
+    fn citations_carry_to_the_next_one() {
+        let text = "zero\n[[A, B (1900)]]\none\n\ntwo\n [[ C ]] \n\n\
+                    three\n[[]]\nfour\n[[not]] a citation";
+        assert_eq!(
+            passages(text),
+            [
+                uncited(&["zero"]),
+                cited(&["one"], "A, B (1900)"),
+                cited(&["two"], "A, B (1900)"),
+                cited(&["three"], "C"),
+                uncited(&["four", "[[not]]", "a", "citation"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_bundled_passage_is_cited() {
         for (name, text) in TEXTS {
-            let n = passages(text).len();
-            assert!(n >= 12, "{name} has {n} passages");
+            let passages = passages(text);
+            assert!(passages.len() >= 12, "{name} has {}", passages.len());
+            let uncited = passages.iter().find(|p| p.cite.is_none());
+            assert_eq!(uncited, None, "{name}");
             assert!(LANGUAGES.iter().any(|(l, _)| *l == name));
         }
     }
@@ -241,7 +304,8 @@ mod tests {
             .join(format!("oui-texts-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("french")).unwrap();
-        fs::write(dir.join("french/b.txt"), "deux\n\ntrois").unwrap();
+        let b = "[[Moi]]\ndeux\n\ntrois";
+        fs::write(dir.join("french/b.txt"), b).unwrap();
         fs::write(dir.join("french/a.txt"), "un").unwrap();
         fs::write(dir.join("french/notes.md"), "ignored").unwrap();
         let bundled = passages(TEXTS[1].1).len();
@@ -249,7 +313,11 @@ mod tests {
         assert_eq!(all.len(), bundled + 3);
         assert_eq!(
             all[bundled..],
-            [owned(&["un"]), owned(&["deux"]), owned(&["trois"])]
+            [
+                uncited(&["un"]),
+                cited(&["deux"], "Moi"),
+                cited(&["trois"], "Moi")
+            ]
         );
         assert_eq!(load_passages("german", &dir).unwrap().len(), 0);
         fs::remove_dir_all(&dir).unwrap();
@@ -257,8 +325,10 @@ mod tests {
 
     #[test]
     fn passages_start_on_a_passage_and_know_its_length() {
-        let source =
-            Source::passages(vec![owned(&["a", "b"]), owned(&["c", "d", "e"])]);
+        let source = Source::passages(vec![
+            uncited(&["a", "b"]),
+            cited(&["c", "d", "e"], "Z"),
+        ]);
         let mut rng = Rng::with_seed(5);
         for _ in 0..20 {
             let start = source.start(&mut rng);
@@ -269,6 +339,8 @@ mod tests {
             (Some(2), Some(3))
         );
         assert_eq!(source.passage_len(1), None);
+        assert_eq!((source.cite(0), source.cite(2)), (None, Some("Z")));
+        assert_eq!(source.cite(1), None);
         assert_eq!(source.take(2, 4, &mut rng), owned(&["c", "d", "e", "a"]));
     }
 

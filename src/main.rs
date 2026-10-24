@@ -47,7 +47,8 @@ Files (under $OUI_HOME, default ~/.oui):
                            layout   = auto         # or qwerty, jcuken
   history.jsonl          every test, keystrokes included; read by `oui stats`
   texts/<language>/*.txt your own passages for --mode text, blank-line
-                         separated";
+                         separated; a [[Author, Work]] line cites those
+                         after it";
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
@@ -245,6 +246,14 @@ impl App {
         format!("{} · drill {}", self.title, drill.join(" "))
     }
 
+    /// Where the passage a test started on is from; drills cite nothing.
+    fn cite(&self) -> Option<&str> {
+        if !self.feed.drill.is_empty() {
+            return None;
+        }
+        self.feed.source.cite(self.feed.start)
+    }
+
     /// Advances the clock; returns to results once the session is over.
     fn tick(&mut self, now: Instant) {
         let Screen::Typing(session) = &mut self.screen else { return };
@@ -318,13 +327,18 @@ impl App {
 
     fn draw(&self, frame: &mut Frame, now: Instant) {
         let title = self.title();
+        let cite = self.cite();
         match &self.screen {
             Screen::Typing(session) => {
-                ui::typing::draw(frame, session, now, &title)
+                ui::typing::draw(frame, session, now, &title, cite)
             }
             Screen::Results { report, measure } => {
                 let notice = self.notice.as_deref();
                 let (layout, measure) = (self.layout, *measure);
+                let title = match cite {
+                    Some(cite) => format!("{title} · {cite}"),
+                    None => title,
+                };
                 ui::results::draw(
                     frame, report, layout, measure, &title, notice,
                 )
@@ -668,6 +682,7 @@ mod tests {
         let len = app.feed.source.passage_len(app.feed.start);
         assert_eq!(Some(session.words().len()), len);
         assert!(session.words()[0].starts_with(char::is_uppercase));
+        assert!(app.cite().is_some_and(|c| c.contains(", ")), "bundled");
     }
 
     #[test]
@@ -830,6 +845,20 @@ mod tests {
             "b",
             "text resumes where it left off"
         );
+    }
+
+    #[test]
+    fn passages_are_cited_except_in_drills() {
+        let passage = words::Passage {
+            words: words::split("ab cd"),
+            cite: Some("X, Y (1900)".into()),
+        };
+        let source = Source::passages(vec![passage]);
+        let mut app = App::new(test_setup(source, Limit::Passage), None);
+        assert_eq!(app.cite(), Some("X, Y (1900)"));
+        app.feed.drill = vec![('a', 'b')];
+        assert_eq!(app.cite(), None);
+        assert_eq!(self::app("ab", Limit::Words(1)).cite(), None);
     }
 
     #[test]

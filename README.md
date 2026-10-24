@@ -125,8 +125,8 @@ layout   = auto           # or qwerty, jcuken
 
 Your own passages for `-m text` go in `~/.oui/texts/<language>/*.txt`,
 separated by blank lines. A line `[[Author, Work (year)]]` cites the
-passages after it, shown under the text as you type and on the results;
-the bundled ones are all cited. `oui --help` lists all of this too.
+passages after it, shown under the text as you type and on the results.
+`oui --help` lists all of this too.
 
 ```
 [[Jane Austen, Emma (1815)]]
@@ -134,6 +134,14 @@ Emma Woodhouse, handsome, clever, and rich, ...
 
 Another passage from Emma.
 ```
+
+## Bundled words and texts
+
+Each language has 1,000 words: the most frequent forms in the bundled
+books, without names or archaic forms. Text mode draws on about 140
+passages per language from some 45 public-domain classics each, taken
+verbatim from Project Gutenberg (English, French) and ilibrary.ru
+(Russian) and cited by author, work and year.
 
 ## Files
 

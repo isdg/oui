@@ -242,6 +242,7 @@ fn score(word: &str, targets: &[(char, char)]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyboard::Layout;
 
     #[test]
     fn typography_folds_to_typeable_ascii() {
@@ -291,10 +292,30 @@ mod tests {
     fn every_bundled_passage_is_cited() {
         for (name, text) in TEXTS {
             let passages = passages(text);
-            assert!(passages.len() >= 12, "{name} has {}", passages.len());
+            assert!(passages.len() >= 100, "{name} has {}", passages.len());
             let uncited = passages.iter().find(|p| p.cite.is_none());
             assert_eq!(uncited, None, "{name}");
             assert!(LANGUAGES.iter().any(|(l, _)| *l == name));
+        }
+    }
+
+    #[test]
+    fn every_bundled_character_has_a_key() {
+        let lists = LANGUAGES.iter().map(|&(name, text)| (name, split(text)));
+        let texts = TEXTS.iter().map(|&(name, text)| {
+            (name, passages(text).into_iter().flat_map(|p| p.words).collect())
+        });
+        // Russian prose quotes the odd Latin name or apostrophe, typed by
+        // switching layout, so any bundled layout will do.
+        let typeable = |c: char| {
+            [Layout::Qwerty, Layout::Jcuken]
+                .iter()
+                .any(|l| l.locate(c).is_some())
+        };
+        for (name, words) in lists.chain(texts) {
+            let chars = words.iter().flat_map(|w: &String| w.chars());
+            let keyless: String = chars.filter(|&c| !typeable(c)).collect();
+            assert!(keyless.is_empty(), "{name}: {keyless:?}");
         }
     }
 
@@ -381,7 +402,7 @@ mod tests {
             let mut unique = words.clone();
             unique.sort();
             unique.dedup();
-            assert!(words.len() >= 150, "{name} has {} words", words.len());
+            assert!(words.len() >= 1000, "{name} has {} words", words.len());
             assert_eq!(unique.len(), words.len(), "{name} has duplicates");
         }
     }

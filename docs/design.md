@@ -170,7 +170,8 @@ random words, or the whole text for a file; `-t` switches to a timed test.
 - Every test with a keystroke is appended to `~/.oui/history.jsonl`
   (`$OUI_HOME`): a versioned summary plus the target words, typed words and
   raw keystrokes, so stats are recomputed rather than trusted. Newer or
-  unreadable lines are skipped.
+  unreadable lines are skipped. A cited passage's source is kept too, as an
+  optional field, so older readers and records are unaffected.
 - `oui stats` combines the records: a `plc stat`-style block, WPM per test,
   both heatmaps over every keystroke, the rankings. Drills rank weak bigrams
   over the last 20 tests of the same language.

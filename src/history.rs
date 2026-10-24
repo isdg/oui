@@ -46,6 +46,9 @@ pub struct Meta {
     #[serde(default)]
     pub with: Vec<String>,
     pub layout: String,
+    /// Where a text-mode passage is from, when its text cites it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cite: Option<String>,
 }
 
 /// A keystroke as `[ms, expected, typed, prev, chained]`.
@@ -221,6 +224,7 @@ mod tests {
             mode: "words".into(),
             with: vec![],
             layout: "qwerty".into(),
+            cite: None,
         }
     }
 
@@ -245,6 +249,20 @@ mod tests {
             serde_json::to_string(&stroke).unwrap(),
             r#"[120,"b","x","a",true]"#
         );
+    }
+
+    #[test]
+    fn cites_are_stored_only_when_present() {
+        let (s, now) = played(&["a"], "a", None);
+        let plain = Record::new(&s, now, String::new(), meta());
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("cite"), "older readers see no change");
+        let back: Record = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.meta.cite, None);
+        let cite = Some("Austen, Emma (1815)".to_string());
+        let cited = Record { meta: Meta { cite, ..meta() }, ..plain };
+        let json = serde_json::to_string(&cited).unwrap();
+        assert_eq!(serde_json::from_str::<Record>(&json).unwrap(), cited);
     }
 
     #[test]

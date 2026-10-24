@@ -20,6 +20,8 @@ const PLOT_COLS: usize = 70;
 const PLOT_ROWS: usize = 8;
 /// Columns each ranking takes when printed side by side.
 const RANKING_WIDTH: usize = 24;
+/// Cited tests listed under the plot, most recent first.
+const RECENT_TEXTS: usize = 10;
 /// Same-finger bigrams listed under the geometry tables.
 const SAME_FINGER_TOP: usize = 8;
 
@@ -113,6 +115,7 @@ pub fn render(
             out.push_str(&wpm_plot(&title, &means));
         }
     }
+    out.push_str(&recent_texts(records));
     if geometry {
         out.push_str(&geometry_tables(&all, layout));
         return out;
@@ -132,6 +135,30 @@ pub fn render(
     ];
     for line in side_by_side(&rankings, RANKING_WIDTH) {
         let _ = writeln!(out, "{}", format!("     {line}").trim_end());
+    }
+    out
+}
+
+/// What the latest text-mode tests typed, by their citations; empty when
+/// no test was cited.
+fn recent_texts(records: &[Record]) -> String {
+    let cited = records.iter().rev().filter_map(|r| {
+        let cite = r.meta.cite.as_deref()?;
+        let stopped = if r.completed { "" } else { "  (stopped)" };
+        Some(format!(
+            "     {}  {:>4.0} wpm  {:>5.1}%  {cite}{stopped}",
+            day(&r.at),
+            r.wpm,
+            r.accuracy * 100.0
+        ))
+    });
+    let lines: Vec<String> = cited.take(RECENT_TEXTS).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = format!("\n     {}\n", results::rule("Recent texts", 41));
+    for line in lines {
+        let _ = writeln!(out, "{line}");
     }
     out
 }
@@ -450,6 +477,29 @@ mod tests {
         let row =
             out.lines().find(|l| l.starts_with("     2026-10-24")).unwrap();
         assert!(row.contains("   —     —"), "{row}");
+    }
+
+    #[test]
+    fn recent_texts_list_cited_tests_newest_first() {
+        let cited = |text: &str, keys: &str, at: &str, cite: &str| {
+            let mut r = record(text, keys, at);
+            r.meta.cite = Some(cite.to_string());
+            r
+        };
+        let records = [
+            cited("ab", "ab", "2026-10-22T09:00:00+02:00", "Austen, Emma"),
+            record("ab", "ab", "2026-10-23T09:00:00+02:00"),
+            cited("ab cd", "ab", "2026-10-24T09:00:00+02:00", "Gogol, Nos"),
+        ];
+        let out = render(&records, Layout::Qwerty, false, None, false);
+        let texts = out.split("── Recent texts").nth(1).unwrap();
+        let lines: Vec<&str> = texts.lines().skip(1).take(2).collect();
+        assert!(lines[0].starts_with("     2026-10-24"), "{out}");
+        assert!(lines[0].ends_with("Gogol, Nos  (stopped)"), "{out}");
+        assert!(lines[1].starts_with("     2026-10-22"), "{out}");
+        assert!(lines[1].ends_with("100.0%  Austen, Emma"), "{out}");
+        let plain = render(&records[1..2], Layout::Qwerty, false, None, false);
+        assert!(!plain.contains("Recent texts"));
     }
 
     #[test]

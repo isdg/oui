@@ -162,6 +162,14 @@ impl Feed {
         self.drawn += words.len();
         self.decorator.apply(words, &mut self.rng)
     }
+
+    /// Where the passage a test started on is from; drills cite nothing.
+    fn cite(&self) -> Option<&str> {
+        if !self.drill.is_empty() {
+            return None;
+        }
+        self.source.cite(self.start)
+    }
 }
 
 /// A run's settings, resolved from the command line.
@@ -246,12 +254,8 @@ impl App {
         format!("{} · drill {}", self.title, drill.join(" "))
     }
 
-    /// Where the passage a test started on is from; drills cite nothing.
     fn cite(&self) -> Option<&str> {
-        if !self.feed.drill.is_empty() {
-            return None;
-        }
-        self.feed.source.cite(self.feed.start)
+        self.feed.cite()
     }
 
     /// Advances the clock; returns to results once the session is over.
@@ -262,7 +266,9 @@ impl App {
             session.extend(self.feed.take(BATCH));
         }
         if session.finished() {
-            let saved = save(self.store.as_ref(), session, now, &self.meta);
+            let cite = self.feed.cite().map(str::to_owned);
+            let meta = Meta { cite, ..self.meta.clone() };
+            let saved = save(self.store.as_ref(), session, now, &meta);
             self.notice = saved.err().map(|e| format!("not saved: {e:#}"));
             let report = Report::new(session, session.elapsed(now));
             if !session.log().is_empty() {
@@ -506,6 +512,7 @@ fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
         mode: mode.to_string(),
         with,
         layout: layout.name().to_string(),
+        cite: None,
     };
     Ok(Setup { source, limit, layout, title, meta, extras })
 }
@@ -905,7 +912,25 @@ mod tests {
         let completed: Vec<bool> =
             records.iter().map(|r| r.completed).collect();
         assert_eq!(completed, [true, false]);
+        assert!(records.iter().all(|r| r.meta.cite.is_none()));
         assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn a_passage_test_records_its_citation() {
+        let tmp = TempDir::new("cite");
+        let store = Store::at(&tmp.0);
+        let passage = words::Passage {
+            words: words::split("ab"),
+            cite: Some("X, Y (1900)".into()),
+        };
+        let source = Source::passages(vec![passage]);
+        let setup = test_setup(source, Limit::Passage);
+        let mut app = App::new(setup, Some(store.clone()));
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Char('b'));
+        let records = store.load().unwrap().records;
+        assert_eq!(records[0].meta.cite.as_deref(), Some("X, Y (1900)"));
     }
 
     #[test]

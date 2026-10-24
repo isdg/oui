@@ -92,6 +92,10 @@ WPM and accuracy per period, with the plot showing the mean per period
 instead of every test. Its y-axis starts at the slowest value's ten, not at
 zero, so a trend of a few WPM stays visible.
 
+Text-mode tests are recorded with their passage's citation, and `oui
+stats` lists the last ten under **Recent texts**: when, how fast, how
+accurate, and what it was.
+
 **Rhythm** is the mean gap between keys, its standard deviation within
 each test, and that deviation as a share of the mean: the higher it is,
 the more uneven the typing, whatever its speed.

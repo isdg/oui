@@ -143,11 +143,17 @@ Another passage from Emma.
 
 ## Bundled words and texts
 
-Each language has 1,000 words: the most frequent forms in the bundled
-books, without names or archaic forms. Text mode draws on about 140
-passages per language from some 45 public-domain classics each, taken
-verbatim from Project Gutenberg (English, French) and ilibrary.ru
-(Russian) and cited by author, work and year.
+Word lists hold the most frequent forms in the bundled books, found in at
+least four of them, without names or archaic forms. Passages are taken
+verbatim from public-domain classics -- Project Gutenberg for English and
+French, ilibrary.ru for Russian -- spread through each book and cited by
+author, work and year; old French spellings are left out.
+
+| Language | Words | Passages | Works |
+|---|---|---|---|
+| English | 5,000 | 1,000 | 139 |
+| French | 5,000 | 1,000 | 116 |
+| Russian | 1,000 | 149 | 55 |
 
 ## Files
 

@@ -153,7 +153,7 @@ author, work and year; old French spellings are left out.
 |---|---|---|---|
 | English | 5,000 | 2,000 | 139 |
 | French | 5,000 | 2,000 | 116 |
-| Russian | 1,000 | 149 | 55 |
+| Russian | 5,000 | 2,000 | 132 |
 
 ## Files
 

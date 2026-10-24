@@ -14,6 +14,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
+use oui::chain::Chain;
 use oui::config::Config;
 use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
@@ -41,7 +42,7 @@ Files (under $OUI_HOME, default ~/.oui):
   config                 defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # or text
+                           mode     = words        # or text, funny
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -524,12 +525,15 @@ fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
         Source::Random(_) => "words",
         Source::Text(_) => "file",
         Source::Passages { .. } => "text",
+        Source::Funny(_) => "funny",
     };
-    let what = match with.as_slice() {
-        [] if mode == "text" => format!("{name} text"),
-        [] => name.clone(),
-        with => format!("{name} with {}", with.join(", ")),
+    let mut what = match mode {
+        "text" | "funny" => format!("{name} {mode}"),
+        _ => name.clone(),
     };
+    if !with.is_empty() {
+        what = format!("{what} with {}", with.join(", "));
+    }
     let title = match limit {
         Limit::Words(n) => format!("{what} · {n} words"),
         Limit::Time(d) => format!("{what} · {}s", d.as_secs()),
@@ -575,7 +579,7 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
     }
     let language =
         cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
-    if cli.mode == Some(Mode::Text) {
+    if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
         let passages = words::load_passages(&language, texts)?;
         if passages.is_empty() {
             let dir = texts.join(&language);
@@ -584,7 +588,11 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
                 dir.display()
             );
         }
-        return Ok((Source::passages(passages), language));
+        let source = match mode {
+            Mode::Funny => Source::Funny(Chain::new(&passages)),
+            _ => Source::passages(passages),
+        };
+        return Ok((source, language));
     }
     let Some(words) = words::language(&language) else {
         let known: Vec<&str> =
@@ -601,7 +609,9 @@ fn limit(cli: &TestArgs, source: &Source) -> Limit {
     match (cli.words, source) {
         (Some(n), _) => Limit::Words(n.get()),
         (None, Source::Text(text)) => Limit::Words(text.len()),
-        (None, Source::Random(_)) => Limit::Words(DEFAULT_WORDS),
+        (None, Source::Random(_) | Source::Funny(_)) => {
+            Limit::Words(DEFAULT_WORDS)
+        }
         (None, Source::Passages { .. }) => Limit::Passage,
     }
 }
@@ -705,6 +715,25 @@ mod tests {
         );
         assert!(Cli::try_parse_from(["oui", "-W", "x"]).is_err());
         assert!(Cli::try_parse_from(["oui", "notes.txt", "-W", "p"]).is_err());
+    }
+
+    #[test]
+    fn funny_mode_walks_the_prose_and_takes_extras() {
+        let args = cli(&["-m", "funnywords", "-l", "russian", "-W", "p"]);
+        let setup = setup(&args, &no_texts()).unwrap();
+        assert_eq!(setup.title, "russian funny with punctuation · 50 words");
+        assert_eq!(setup.meta.mode, "funny");
+        assert_eq!(setup.layout, Layout::Jcuken);
+        let Source::Funny(chain) = &setup.source else { unreachable!() };
+        let vocab = chain.words().to_vec();
+        let app = App::new(setup, None);
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words().len(), DEFAULT_WORDS);
+        let known = |w: &String| {
+            let bare = w.trim_matches(|c: char| !c.is_alphabetic());
+            vocab.iter().any(|v| v.to_lowercase() == bare.to_lowercase())
+        };
+        assert!(session.words().iter().all(known));
     }
 
     #[test]

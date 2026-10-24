@@ -132,6 +132,15 @@ QWERTY), and tallies are summed per physical key. Without `-k`, the layout
 is the one that places the most characters of the test, so Russian text
 gets ЙЦУКЕН and everything else QWERTY.
 
+### Funny mode
+
+`--mode funny` walks a Markov chain over the language's passages, bundled
+and the user's: which words follow the two before them, where the prose
+goes on in more than one way, and else which follow the one before. The
+fallback keeps walks from retracing a passage, so phrases read like the
+language while sentences drift into nonsense. Words are lowercased and
+bare of punctuation, as in words mode, and take `--with` extras the same.
+
 ### Drill
 
 `p` scores every word in the pool by how many weak bigrams it contains — word
@@ -144,6 +153,7 @@ proportion to that score.
 src/
   lib.rs       module list
   words.rs     bundled lists, text sources, sampling, drills
+  chain.rs     word chains over prose for --mode funny
   session.rs   typing state machine and keystroke log
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline
   plot.rs      plc-style line chart

@@ -1,5 +1,6 @@
 //! oui — a typing test that finds the keys and bigrams slowing you down.
 
+pub mod chain;
 pub mod config;
 pub mod extras;
 pub mod geometry;

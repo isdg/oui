@@ -21,6 +21,7 @@ oui                       # 50 random English words
 oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -W p,n                # with punctuation and numbers mixed in
 oui -m text -l french     # a passage of real French prose
+oui -m funny              # words that follow each other as in prose
 oui -t 60                 # a timed test of 60 seconds
 oui notes.txt             # your own text, in order
 oui stats                 # everything recorded so far
@@ -30,7 +31,7 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default) or `text`: a random passage of real prose. |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
 | `-t, --time` | Make it a timed test of this many seconds. |
@@ -122,7 +123,7 @@ same format as `plcrc`; flags override it. Unknown keys are errors.
 
 ```
 language = russian
-mode     = words          # or text
+mode     = words          # or text, funny
 with     = punctuation, numbers
 words    = 50             # or time = 60
 layout   = auto           # or qwerty, jcuken
@@ -158,6 +159,7 @@ verbatim from Project Gutenberg (English, French) and ilibrary.ru
 - `src/geometry.rs` — finger, hand and row per key; tallies over them.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
+- `src/chain.rs` — the word chains behind `--mode funny`.
 - `src/extras.rs` — `--with` punctuation, numbers, capitals, symbols.
 - `src/keyboard.rs` — layouts, character-to-key mapping, heatmap tiles.
 - `src/plot.rs` — the line chart, ported from `plc`.

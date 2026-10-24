@@ -8,12 +8,18 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use fastrand::Rng;
 
+use crate::chain::Chain;
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Random words from the language's list.
     Words,
     /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
     Text,
+    /// Words that follow each other as in that prose: phrases that almost
+    /// mean something.
+    #[value(alias = "funnywords")]
+    Funny,
 }
 
 /// Bundled word lists, keyed by the name `--language` takes.
@@ -129,6 +135,8 @@ pub enum Source {
         starts: Vec<usize>,
         cites: Vec<Option<String>>,
     },
+    /// Walks over which word follows which in prose.
+    Funny(Chain),
 }
 
 impl Source {
@@ -149,6 +157,7 @@ impl Source {
             Source::Random(words)
             | Source::Text(words)
             | Source::Passages { words, .. } => words,
+            Source::Funny(chain) => chain.words(),
         }
     }
 
@@ -184,6 +193,7 @@ impl Source {
     pub fn take(&self, from: usize, n: usize, rng: &mut Rng) -> Vec<String> {
         match self {
             Source::Random(pool) => sample(pool, n, rng),
+            Source::Funny(chain) => chain.walk(n, rng),
             Source::Text(text) | Source::Passages { words: text, .. } => {
                 if text.is_empty() {
                     return Vec::new();

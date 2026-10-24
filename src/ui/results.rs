@@ -62,7 +62,8 @@ pub fn draw(
     ] {
         frame.render_widget(Paragraph::new(lines(ranking)), area);
     }
-    let keys = " r new test · p drill weak bigrams · tab errors/speed · q quit";
+    let keys = " r new test · p drill weak bigrams · tab errors/speed · \
+                o text · q quit";
     frame.render_widget(Line::from(keys).dim(), footer);
     if let Some(notice) = notice {
         let notice = Line::from(format!("{notice} ")).red().right_aligned();

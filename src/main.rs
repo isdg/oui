@@ -134,7 +134,14 @@ enum Limit {
 
 enum Screen {
     Typing(Session),
-    Results { report: Report, measure: Measure },
+    Results {
+        report: Box<Report>,
+        measure: Measure,
+        /// The finished test, for its text.
+        session: Session,
+        /// How far the text is scrolled while shown instead of the results.
+        review: Option<usize>,
+    },
 }
 
 /// Where a session's words come from: the source, or a drill over it.
@@ -254,10 +261,6 @@ impl App {
         format!("{} · drill {}", self.title, drill.join(" "))
     }
 
-    fn cite(&self) -> Option<&str> {
-        self.feed.cite()
-    }
-
     /// Advances the clock; returns to results once the session is over.
     fn tick(&mut self, now: Instant) {
         let Screen::Typing(session) = &mut self.screen else { return };
@@ -276,8 +279,12 @@ impl App {
                 let excess = self.recent.len().saturating_sub(RECENT);
                 self.recent.drain(..excess);
             }
-            self.screen =
-                Screen::Results { report, measure: Measure::default() };
+            self.screen = Screen::Results {
+                report: Box::new(report),
+                measure: Measure::default(),
+                session: session.clone(),
+                review: None,
+            };
         }
     }
 
@@ -313,32 +320,51 @@ impl App {
                 }
                 self.tick(now);
             }
-            Screen::Results { measure, .. } => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return false,
-                KeyCode::Char('r') => {
-                    self.feed.drill.clear();
-                    self.restart();
+            Screen::Results { measure, session, review, .. } => {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return false,
+                    KeyCode::Char('o') => {
+                        *review = if review.is_some() { None } else { Some(0) };
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if let Some(row) = review {
+                            *row = (*row + 1).min(session.words().len());
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if let Some(row) = review {
+                            *row = row.saturating_sub(1);
+                        }
+                    }
+                    KeyCode::Char('r') => {
+                        self.feed.drill.clear();
+                        self.restart();
+                    }
+                    KeyCode::Char('p') => {
+                        let recent = stats::combine(&self.recent);
+                        self.feed.drill = recent.weak_bigrams(DRILL);
+                        self.restart();
+                    }
+                    KeyCode::Tab => *measure = measure.toggle(),
+                    _ => {}
                 }
-                KeyCode::Char('p') => {
-                    let recent = stats::combine(&self.recent);
-                    self.feed.drill = recent.weak_bigrams(DRILL);
-                    self.restart();
-                }
-                KeyCode::Tab => *measure = measure.toggle(),
-                _ => {}
-            },
+            }
         }
         true
     }
 
-    fn draw(&self, frame: &mut Frame, now: Instant) {
+    /// Draws the screen; a scrolled text keeps the scroll it could show.
+    fn draw(&mut self, frame: &mut Frame, now: Instant) {
         let title = self.title();
-        let cite = self.cite();
-        match &self.screen {
+        let cite = self.feed.cite();
+        match &mut self.screen {
             Screen::Typing(session) => {
                 ui::typing::draw(frame, session, now, &title, cite)
             }
-            Screen::Results { report, measure } => {
+            Screen::Results { session, review: Some(row), .. } => {
+                *row = ui::review::draw(frame, session, &title, cite, *row);
+            }
+            Screen::Results { report, measure, .. } => {
                 let notice = self.notice.as_deref();
                 let (layout, measure) = (self.layout, *measure);
                 let title = match cite {
@@ -689,7 +715,7 @@ mod tests {
         let len = app.feed.source.passage_len(app.feed.start);
         assert_eq!(Some(session.words().len()), len);
         assert!(session.words()[0].starts_with(char::is_uppercase));
-        assert!(app.cite().is_some_and(|c| c.contains(", ")), "bundled");
+        assert!(app.feed.cite().is_some_and(|c| c.contains(", ")), "bundled");
     }
 
     #[test]
@@ -862,10 +888,10 @@ mod tests {
         };
         let source = Source::passages(vec![passage]);
         let mut app = App::new(test_setup(source, Limit::Passage), None);
-        assert_eq!(app.cite(), Some("X, Y (1900)"));
+        assert_eq!(app.feed.cite(), Some("X, Y (1900)"));
         app.feed.drill = vec![('a', 'b')];
-        assert_eq!(app.cite(), None);
-        assert_eq!(self::app("ab", Limit::Words(1)).cite(), None);
+        assert_eq!(app.feed.cite(), None);
+        assert_eq!(self::app("ab", Limit::Words(1)).feed.cite(), None);
     }
 
     #[test]
@@ -988,5 +1014,33 @@ mod tests {
             unreachable!()
         };
         assert_eq!(measure, Measure::Speed);
+    }
+
+    #[test]
+    fn o_shows_the_typed_text_and_arrows_scroll_it() {
+        let mut app = app("ab cd", Limit::Words(2));
+        for c in "ab cd".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let review = |app: &App| match &app.screen {
+            Screen::Results { review, session, .. } => {
+                assert_eq!(session.words(), ["ab", "cd"]);
+                *review
+            }
+            Screen::Typing(_) => unreachable!(),
+        };
+        assert_eq!(review(&app), None);
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(review(&app), Some(0));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(review(&app), Some(2), "no further than the words");
+        press(&mut app, KeyCode::Up);
+        assert_eq!(review(&app), Some(1));
+        press(&mut app, KeyCode::Char('o'));
+        assert_eq!(review(&app), None);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(review(&app), None, "arrows do nothing on the results");
     }
 }

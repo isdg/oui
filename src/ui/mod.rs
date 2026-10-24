@@ -2,6 +2,7 @@
 //! into a test buffer.
 
 pub mod results;
+pub mod review;
 pub mod typing;
 
 use std::time::Duration;

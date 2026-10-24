@@ -53,8 +53,10 @@ While typing:
 | `esc` | Show results; quit if nothing is typed yet. |
 | `ctrl-c` | Quit. |
 
-On the results screen, `tab` flips the heatmap between errors and speed, `r`
-starts a new test, `p` starts a **drill** and `q` quits. A drill draws words
+On the results screen, `tab` flips the heatmap between errors and speed, `o`
+shows the text you typed -- hits green, misses red, the rest dimmed, with
+its citation; `↑`/`↓` scroll it and `o` goes back -- `r` starts a new
+test, `p` starts a **drill** and `q` quits. A drill draws words
 in proportion to how many of your weakest bigrams they contain -- the three
 most missed and the three slowest over your last 20 tests of that language
 -- and keeps drilling on `tab` until you press `r`.

@@ -176,7 +176,7 @@ fn word(s: &Session, i: usize) -> Vec<Span<'static>> {
 
 /// The typed part of a word: target characters green when hit and red when
 /// missed, then any overflow as typed.
-fn typed_spans(target: &str, input: &str) -> Vec<Span<'static>> {
+pub(super) fn typed_spans(target: &str, input: &str) -> Vec<Span<'static>> {
     let mut want = target.chars();
     let span = |c: char| match want.next() {
         Some(w) if w == c => Span::styled(w.to_string(), Style::new().green()),
@@ -188,7 +188,7 @@ fn typed_spans(target: &str, input: &str) -> Vec<Span<'static>> {
 
 /// Greedy word wrap: the word ranges of each line, none wider than `max`
 /// unless a single word is.
-fn wrap(widths: &[usize], max: usize) -> Vec<Range<usize>> {
+pub(super) fn wrap(widths: &[usize], max: usize) -> Vec<Range<usize>> {
     let mut rows = Vec::new();
     let (mut start, mut used) = (0, 0);
     for (i, &w) in widths.iter().enumerate() {

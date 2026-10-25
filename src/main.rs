@@ -126,6 +126,9 @@ struct TestArgs {
     /// default, so Russian text gets ЙЦУКЕН.
     #[arg(short = 'k', long, value_enum)]
     layout: Option<Layout>,
+    /// Record nothing: tests are left out of history.jsonl and `oui stats`.
+    #[arg(short, long, alias = "inkognito")]
+    incognito: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +194,7 @@ struct Setup {
     title: String,
     meta: Meta,
     extras: Vec<Extra>,
+    incognito: bool,
 }
 
 struct App {
@@ -199,8 +203,10 @@ struct App {
     layout: Layout,
     title: String,
     meta: Meta,
-    /// Where finished tests are recorded; `None` records nothing.
+    /// The history drills draw on; `None` reads nothing.
     store: Option<Store>,
+    /// Finished tests are not recorded in the store.
+    incognito: bool,
     /// Shown on the results screen, e.g. when a record could not be saved.
     notice: Option<String>,
     /// The last [`RECENT`] tests of this source, which drills draw on.
@@ -210,7 +216,8 @@ struct App {
 
 impl App {
     fn new(setup: Setup, store: Option<Store>) -> Self {
-        let Setup { source, limit, layout, title, meta, extras } = setup;
+        let Setup { source, limit, layout, title, meta, extras, incognito } =
+            setup;
         let (recent, notice) = match store.as_ref().map(|s| recent(s, &meta)) {
             Some(Err(e)) => (Vec::new(), Some(format!("history: {e:#}"))),
             Some(Ok(recent)) => (recent, None),
@@ -230,6 +237,7 @@ impl App {
             title,
             meta,
             store,
+            incognito,
             notice,
             recent,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
@@ -275,7 +283,8 @@ impl App {
         if session.finished() {
             let cite = self.feed.cite().map(str::to_owned);
             let meta = Meta { cite, ..self.meta.clone() };
-            let saved = save(self.store.as_ref(), session, now, &meta);
+            let store = self.store.as_ref().filter(|_| !self.incognito);
+            let saved = save(store, session, now, &meta);
             self.notice = saved.err().map(|e| format!("not saved: {e:#}"));
             let report = Report::new(session, session.elapsed(now));
             if !session.log().is_empty() {
@@ -506,6 +515,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         words,
         time,
         layout: cli.layout.or(config.layout),
+        incognito: cli.incognito,
     }
 }
 
@@ -534,11 +544,14 @@ fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
     if !with.is_empty() {
         what = format!("{what} with {}", with.join(", "));
     }
-    let title = match limit {
+    let mut title = match limit {
         Limit::Words(n) => format!("{what} · {n} words"),
         Limit::Time(d) => format!("{what} · {}s", d.as_secs()),
         Limit::Passage => format!("{what} · one passage"),
     };
+    if cli.incognito {
+        title.push_str(" · incognito");
+    }
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
     let meta = Meta {
         source: name,
@@ -547,7 +560,8 @@ fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
         layout: layout.name().to_string(),
         cite: None,
     };
-    Ok(Setup { source, limit, layout, title, meta, extras })
+    let incognito = cli.incognito;
+    Ok(Setup { source, limit, layout, title, meta, extras, incognito })
 }
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
@@ -649,6 +663,7 @@ mod tests {
             title: "t".into(),
             meta: Meta::default(),
             extras: Vec::new(),
+            incognito: false,
         }
     }
 
@@ -976,6 +991,41 @@ mod tests {
         assert_eq!(completed, [true, false]);
         assert!(records.iter().all(|r| r.meta.cite.is_none()));
         assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn incognito_records_nothing_but_still_drills_on_history() {
+        let tmp = TempDir::new("incognito");
+        let store = Store::at(&tmp.0);
+        let mut past = Session::new(vec!["cd".into()], None);
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        past.apply(Input::Char('c'), ms(0));
+        past.apply(Input::Char('x'), ms(100));
+        past.apply(Input::Backspace, ms(200));
+        past.apply(Input::Char('d'), ms(300));
+        let meta = Meta { source: "t".into(), ..Meta::default() };
+        store.append(&Record::new(&past, t0, String::new(), meta)).unwrap();
+
+        let args = cli(&["-i", "-w", "9"]);
+        assert!(args.incognito);
+        assert!(setup(&args, &no_texts())
+            .unwrap()
+            .title
+            .ends_with("incognito"));
+        assert!(cli(&["--inkognito"]).incognito);
+        let mut setup = test_setup(words("ab cd"), Limit::Words(2));
+        setup.meta.source = "t".into();
+        setup.incognito = true;
+        let mut app = App::new(setup, Some(store.clone()));
+        for c in "ab cd".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(app.screen, Screen::Results { .. }));
+        assert!(app.notice.is_none());
+        assert_eq!(store.load().unwrap().records.len(), 1, "not recorded");
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.feed.drill, [('c', 'd')]);
     }
 
     #[test]

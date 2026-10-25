@@ -36,6 +36,7 @@ oui stats                 # everything recorded so far
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
 | `-t, --time` | Make it a timed test of this many seconds. |
 | `-k, --layout` | Heatmap layout: `qwerty` or `jcuken` (alias `йцукен`); detected from the words when omitted. |
+| `-i, --incognito` | Record nothing: the tests stay out of the history and `oui stats`. |
 
 Text mode bundles openings of public-domain classics (Austen, Dickens,
 Proust, Hugo, Толстой, Пушкин, Гоголь…). Curly quotes, `«»`, em dashes and the
@@ -80,7 +81,8 @@ most missed and the three slowest over your last 20 tests of that language
 
 Every test that saw a keystroke is appended to `~/.oui/history.jsonl` as it
 ends: a summary plus the raw keystrokes, so any statistic can be recomputed
-later. `oui stats` reads it back:
+later; `-i` runs tests that are not recorded, though drills still draw on
+what was. `oui stats` reads it back:
 
 ```sh
 oui stats                     # all tests: stats, WPM per test, texts

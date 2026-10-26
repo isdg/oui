@@ -3,6 +3,7 @@
 pub mod chain;
 pub mod config;
 pub mod extras;
+pub mod fingering;
 pub mod geometry;
 pub mod history;
 pub mod keyboard;

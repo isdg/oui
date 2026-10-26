@@ -294,7 +294,7 @@ pub fn accuracy(log: &[Keystroke]) -> f64 {
 }
 
 /// The clean latency of keystroke `i`, if it has one.
-fn latency(log: &[Keystroke], i: usize) -> Option<Duration> {
+pub fn latency(log: &[Keystroke], i: usize) -> Option<Duration> {
     let k = log[i];
     let prev = log.get(i.checked_sub(1)?)?;
     let gap = k.at.saturating_sub(prev.at);

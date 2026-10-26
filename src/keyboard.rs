@@ -43,7 +43,7 @@ const JCUKEN: Rows = [
 /// How far right each row starts, mimicking the physical stagger.
 const STAGGER: [usize; 4] = [0, 2, 3, 4];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Key {
     At { row: usize, col: usize },
     Space,
@@ -80,6 +80,12 @@ impl Layout {
         find(c)
             .or_else(|| lower.and_then(find))
             .or_else(|| base(c).and_then(find))
+    }
+
+    /// The character a key types unshifted; `None` for the space bar.
+    pub fn char_at(self, key: Key) -> Option<char> {
+        let Key::At { row, col } = key else { return None };
+        self.rows().get(row)?.get(col)?.chars().next()
     }
 
     /// The layout that can place the most characters of `words`; QWERTY on

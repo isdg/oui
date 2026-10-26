@@ -130,7 +130,7 @@ fn gaps<'a>(
     gaps
 }
 
-fn median(mut values: Vec<Duration>) -> Duration {
+pub(crate) fn median(mut values: Vec<Duration>) -> Duration {
     values.sort_unstable();
     let mid = values.len() / 2;
     match values.len() {

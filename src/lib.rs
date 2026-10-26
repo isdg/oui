@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod history;
 pub mod keyboard;
 pub mod plot;
+pub mod practice;
 pub mod session;
 pub mod stats;
 pub mod summary;

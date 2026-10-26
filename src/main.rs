@@ -3,10 +3,10 @@
 use std::fs;
 use std::io::IsTerminal;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
@@ -19,6 +19,7 @@ use oui::config::Config;
 use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
+use oui::practice;
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
@@ -36,6 +37,8 @@ const FRAME: Duration = Duration::from_millis(100);
 const DRILL: usize = 3;
 /// Tests of the same source a drill looks back over, this one included.
 const RECENT: usize = 20;
+/// Words a practice test draws from, the richest in costly bigrams.
+const PRACTICE: usize = 150;
 
 const FILES_HELP: &str = "\
 Files (under $OUI_HOME, default ~/.oui):
@@ -47,6 +50,7 @@ Files (under $OUI_HOME, default ~/.oui):
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
   history.jsonl          every test, keystrokes included; read by `oui stats`
+                         and --practice
   texts/<language>/*.txt your own passages for --mode text, blank-line
                          separated; a [[Author, Work]] line cites those
                          after it";
@@ -106,6 +110,10 @@ struct TestArgs {
     /// Random words (default), or passages of real prose.
     #[arg(short, long, value_enum, conflicts_with = "file")]
     mode: Option<Mode>,
+    /// Random words richest in the bigrams that cost your tests of the
+    /// language the most time, misses included.
+    #[arg(short, long, conflicts_with_all = ["file", "mode"])]
+    practice: bool,
     /// Extras mixed into random words, comma-separated: punctuation,
     /// numbers, capitals, symbols (or p, n, c, s).
     #[arg(
@@ -428,8 +436,7 @@ fn main() -> Result<()> {
         None => {
             let config = Config::load(&store.dir().join("config"))?;
             let args = merge(&cli.test, &config);
-            let texts = store.dir().join("texts");
-            let app = App::new(setup(&args, &texts)?, Some(store));
+            let app = App::new(setup(&args, &store)?, Some(store));
             ratatui::run(|terminal| run(terminal, app))
         }
     }
@@ -483,7 +490,8 @@ fn select(
 }
 
 /// The flags given, with the config filling in the rest. A FILE takes no
-/// language, mode or extras from the config, nor does text mode extras.
+/// language, mode or extras from the config, nor does text mode extras,
+/// nor practice a mode.
 fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     fn pick<T>(
         flag: Option<T>,
@@ -493,7 +501,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         flag.or(set.filter(|_| from_config))
     }
     let from_config = cli.file.is_none();
-    let mode = pick(cli.mode, config.mode, from_config);
+    let mode = pick(cli.mode, config.mode, from_config && !cli.practice);
     let with = match cli.with.is_empty() {
         false => cli.with.clone(),
         true if from_config && mode != Some(Mode::Text) => config.with.clone(),
@@ -511,6 +519,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
             from_config,
         ),
         mode,
+        practice: cli.practice,
         with,
         words,
         time,
@@ -519,9 +528,9 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     }
 }
 
-/// The run's settings; `texts` is the directory of the user's own passages.
-fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
-    let (source, name) = source(cli, texts)?;
+/// The run's settings, drawing on the passages and history in `store`.
+fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
+    let (source, name) = source(cli, store)?;
     let limit = limit(cli, &source);
     if matches!(source, Source::Passages { .. }) && !cli.with.is_empty() {
         bail!("--with mixes extras into random words, not --mode text");
@@ -532,13 +541,14 @@ fn setup(cli: &TestArgs, texts: &Path) -> Result<Setup> {
     let with: Vec<String> =
         extras.iter().map(|e| e.name().to_string()).collect();
     let mode = match source {
+        _ if cli.practice => "practice",
         Source::Random(_) => "words",
         Source::Text(_) => "file",
         Source::Passages { .. } => "text",
         Source::Funny(_) => "funny",
     };
     let mut what = match mode {
-        "text" | "funny" => format!("{name} {mode}"),
+        "text" | "funny" | "practice" => format!("{name} {mode}"),
         _ => name.clone(),
     };
     if !with.is_empty() {
@@ -580,7 +590,7 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
 }
 
 /// The words to type and a name for them.
-fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
+fn source(cli: &TestArgs, store: &Store) -> Result<(Source, String)> {
     if let Some(path) = &cli.file {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -593,8 +603,13 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
     }
     let language =
         cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
+    if cli.practice {
+        let words = practice_words(&language, store)?;
+        return Ok((Source::Random(words), language));
+    }
     if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
-        let passages = words::load_passages(&language, texts)?;
+        let texts = store.dir().join("texts");
+        let passages = words::load_passages(&language, &texts)?;
         if passages.is_empty() {
             let dir = texts.join(&language);
             bail!(
@@ -609,11 +624,35 @@ fn source(cli: &TestArgs, texts: &Path) -> Result<(Source, String)> {
         return Ok((source, language));
     }
     let Some(words) = words::language(&language) else {
-        let known: Vec<&str> =
-            words::LANGUAGES.iter().map(|(n, _)| *n).collect();
-        bail!("unknown language '{language}' (have {})", known.join(", "));
+        return Err(unknown(&language));
     };
     Ok((Source::Random(words), language))
+}
+
+fn unknown(language: &str) -> anyhow::Error {
+    let known: Vec<&str> = words::LANGUAGES.iter().map(|(n, _)| *n).collect();
+    anyhow!("unknown language '{language}' (have {})", known.join(", "))
+}
+
+/// The [`PRACTICE`] words richest in the bigrams costing the recorded
+/// tests of `language` the most.
+fn practice_words(language: &str, store: &Store) -> Result<Vec<String>> {
+    let texts = store.dir().join("texts");
+    let vocabulary = practice::vocabulary(language, &texts)?;
+    if vocabulary.is_empty() {
+        return Err(unknown(language));
+    }
+    let records = select(store.load()?.records, None, Some(language));
+    if records.is_empty() {
+        let history = store.history();
+        bail!("no {language} tests to practise on in {}", history.display());
+    }
+    let targets = practice::targets(&records, &vocabulary);
+    let words = practice::words(&vocabulary, &targets, PRACTICE);
+    if words.is_empty() {
+        bail!("nothing to practise yet in the {language} tests");
+    }
+    Ok(words)
 }
 
 fn limit(cli: &TestArgs, source: &Source) -> Limit {
@@ -642,8 +681,8 @@ mod tests {
         app.key(KeyEvent::new(code, KeyModifiers::NONE), Instant::now())
     }
 
-    fn no_texts() -> PathBuf {
-        PathBuf::from("/nonexistent/oui-texts")
+    fn no_home() -> Store {
+        Store::at("/nonexistent/oui")
     }
 
     fn words(text: &str) -> Source {
@@ -688,7 +727,7 @@ mod tests {
     #[test]
     fn defaults_to_fifty_english_words() {
         let cli = cli(&[]);
-        let (source, name) = source(&cli, &no_texts()).unwrap();
+        let (source, name) = source(&cli, &no_home()).unwrap();
         assert_eq!(name, "english");
         assert_eq!(limit(&cli, &source), Limit::Words(50));
         assert_eq!(cli.layout, None);
@@ -722,7 +761,7 @@ mod tests {
     #[test]
     fn extras_parse_as_one_list_and_name_the_test() {
         let args = cli(&["-W", "n,p", "--with", "p,symbols", "-w", "9"]);
-        let setup = setup(&args, &no_texts()).unwrap();
+        let setup = setup(&args, &no_home()).unwrap();
         assert_eq!(setup.meta.with, ["punctuation", "numbers", "symbols"]);
         assert_eq!(
             setup.title,
@@ -735,7 +774,7 @@ mod tests {
     #[test]
     fn funny_mode_walks_the_prose_and_takes_extras() {
         let args = cli(&["-m", "funnywords", "-l", "russian", "-W", "p"]);
-        let setup = setup(&args, &no_texts()).unwrap();
+        let setup = setup(&args, &no_home()).unwrap();
         assert_eq!(setup.title, "russian funny with punctuation · 50 words");
         assert_eq!(setup.meta.mode, "funny");
         assert_eq!(setup.layout, Layout::Jcuken);
@@ -754,7 +793,7 @@ mod tests {
     #[test]
     fn text_mode_types_one_whole_passage() {
         let args = cli(&["-m", "text", "-l", "french"]);
-        let setup = setup(&args, &no_texts()).unwrap();
+        let setup = setup(&args, &no_home()).unwrap();
         assert_eq!(setup.title, "french text · one passage");
         assert_eq!(setup.meta.mode, "text");
         let app = App::new(setup, None);
@@ -768,7 +807,7 @@ mod tests {
     #[test]
     fn text_mode_refuses_extras_and_unknown_texts() {
         let err = |args: &[&str]| {
-            setup(&cli(args), &no_texts()).err().unwrap().to_string()
+            setup(&cli(args), &no_home()).err().unwrap().to_string()
         };
         assert!(err(&["-m", "text", "-W", "p"]).starts_with("--with mixes"));
         assert!(err(&["-m", "text", "-l", "german"])
@@ -805,10 +844,7 @@ mod tests {
         assert_eq!((file.language, file.with), (None, vec![]));
         let text = merge(&cli(&["-m", "text"]), &config);
         assert!(text.with.is_empty());
-        assert!(
-            setup(&text, &no_texts()).is_ok(),
-            "config extras are no error"
-        );
+        assert!(setup(&text, &no_home()).is_ok(), "config extras are no error");
         let config = oui::config::parse("mode = text").unwrap();
         assert!(
             merge(&cli(&["-W", "p"]), &config).with == [Extra::Punctuation]
@@ -876,9 +912,71 @@ mod tests {
         assert_eq!(select(all, NonZeroUsize::new(9), None).len(), 4);
     }
 
+    /// A store holding one english test of "aqua", slow from q to u.
+    fn slow_qu(tmp: &TempDir) -> Store {
+        let store = Store::at(&tmp.0);
+        let mut past = Session::new(vec!["aqua".into()], None);
+        let t0 = Instant::now();
+        for (c, ms) in [('a', 0), ('q', 100), ('u', 600), ('a', 700)] {
+            past.apply(Input::Char(c), t0 + Duration::from_millis(ms));
+        }
+        let meta = Meta { source: "english".into(), ..Meta::default() };
+        store.append(&Record::new(&past, t0, String::new(), meta)).unwrap();
+        store
+    }
+
+    #[test]
+    fn practice_draws_words_holding_the_costliest_bigrams() {
+        let tmp = TempDir::new("practice");
+        let store = slow_qu(&tmp);
+        let config = oui::config::parse("mode = text\nwith = p").unwrap();
+        let args = merge(&cli(&["--practice", "-w", "9"]), &config);
+        assert_eq!(args.mode, None, "the config's mode is ignored");
+        let practice = setup(&args, &store).unwrap();
+        assert_eq!(
+            practice.title,
+            "english practice with punctuation · 9 words"
+        );
+        assert_eq!(
+            (practice.meta.source.as_str(), practice.meta.mode.as_str()),
+            ("english", "practice")
+        );
+        let Source::Random(pool) = &practice.source else { unreachable!() };
+        assert!(pool.len() <= PRACTICE && pool.len() > 9);
+        assert!(pool.iter().all(|w| w.contains("qu")), "{pool:?}");
+        let again = setup(&args, &store).unwrap().source;
+        assert_eq!(&again, &practice.source, "the same history, the same pool");
+        let mut app = App::new(practice, Some(store));
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words().len(), 9);
+        for c in "quq".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('p'));
+        assert!(!app.feed.drill.is_empty(), "drills still work");
+    }
+
+    #[test]
+    fn practice_needs_history_and_takes_no_file_or_mode() {
+        let parse =
+            |args: &[&str]| Cli::try_parse_from([&["oui"][..], args].concat());
+        assert!(parse(&["-p", "notes.txt"]).is_err());
+        assert!(parse(&["-p", "-m", "text"]).is_err());
+        assert!(parse(&["-p", "-l", "russian", "-t", "30"]).is_ok());
+        let err = |args: &[&str]| {
+            setup(&cli(args), &no_home()).err().unwrap().to_string()
+        };
+        assert_eq!(
+            err(&["-p"]),
+            "no english tests to practise on in /nonexistent/oui/history.jsonl"
+        );
+        assert!(err(&["-p", "-l", "klingon"]).starts_with("unknown language"));
+    }
+
     #[test]
     fn unknown_language_lists_the_bundled_ones() {
-        let err = source(&cli(&["-l", "klingon"]), &no_texts())
+        let err = source(&cli(&["-l", "klingon"]), &no_home())
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -1009,10 +1107,7 @@ mod tests {
 
         let args = cli(&["-i", "-w", "9"]);
         assert!(args.incognito);
-        assert!(setup(&args, &no_texts())
-            .unwrap()
-            .title
-            .ends_with("incognito"));
+        assert!(setup(&args, &no_home()).unwrap().title.ends_with("incognito"));
         assert!(cli(&["--inkognito"]).incognito);
         let mut setup = test_setup(words("ab cd"), Limit::Words(2));
         setup.meta.source = "t".into();

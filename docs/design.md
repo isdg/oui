@@ -147,12 +147,25 @@ bare of punctuation, as in words mode, and take `--with` extras the same.
 boundaries count, so `␣q` and `e␣` can be drilled — and samples words in
 proportion to that score.
 
+### Practice
+
+`-p` ranks the bigrams of a language's recorded tests by time lost: the sum
+of each clean gap over a baseline, plus three baselines per miss. The
+baseline is the median clean gap after a space for word starts and after
+any other key for the rest: every word has one start, so word choice can
+only target the starts slower than usual. The 16 costliest bigrams, and
+those behind moved or as-one fingering marks, are targets; words of the
+bundled list (else of the passages) are ranked by target cost per
+keystroke, the space after them included, and the top 150 form the pool.
+Ranking is deterministic, ties keeping list order.
+
 ## Code layout
 
 ```
 src/
   lib.rs       module list
   words.rs     bundled lists, text sources, sampling, drills
+  practice.rs  costliest bigrams and the words richest in them, for -p
   chain.rs     word chains over prose for --mode funny
   session.rs   typing state machine and keystroke log
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline

@@ -22,6 +22,7 @@ oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -W p,n                # with punctuation and numbers mixed in
 oui -m text -l french     # a passage of real French prose
 oui -m funny              # words that follow each other as in prose
+oui -p                    # words that drill your costliest bigrams
 oui -t 60                 # a timed test of 60 seconds
 oui notes.txt             # your own text, in order
 oui stats                 # everything recorded so far
@@ -32,6 +33,7 @@ oui stats                 # everything recorded so far
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
 | `-m, --mode` | `words` (default); `text`: a random passage of real prose; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
+| `-p, --practice` | Random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
 | `-t, --time` | Make it a timed test of this many seconds. |
@@ -62,6 +64,18 @@ test, `p` starts a **drill** and `q` quits. A drill draws words
 in proportion to how many of your weakest bigrams they contain -- the three
 most missed and the three slowest over your last 20 tests of that language
 -- and keeps drilling on `tab` until you press `r`.
+
+## Practice
+
+`-p` ranks every bigram of your recorded tests in the language by the time
+it costs: the gaps over your usual one (the median after a space for word
+starts, after any other key otherwise), plus three usual gaps per miss. The
+16 costliest, and the pairs behind the fingering marks of `oui stats -g`,
+are the targets; the 150 words of the language's list with the most target
+cost per keystroke are the pool a test draws from at random, honouring
+`-w`, `-t` and `-W`. Practice tests are recorded like any other, so the
+pool follows your typing as it improves. `p` on the results drills as
+usual.
 
 ## Reading the results
 
@@ -174,6 +188,7 @@ author, work and year; old French spellings are left out.
 - `src/fingering.rs` — the fingers your timing implies.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
+- `src/practice.rs` — the costliest bigrams and the words for `-p`.
 - `src/chain.rs` — the word chains behind `--mode funny`.
 - `src/extras.rs` — `--with` punctuation, numbers, capitals, symbols.
 - `src/keyboard.rs` — layouts, character-to-key mapping, heatmap tiles.

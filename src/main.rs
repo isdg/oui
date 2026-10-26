@@ -19,7 +19,7 @@ use oui::config::Config;
 use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
-use oui::practice;
+use oui::practice::{self, Target};
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
@@ -39,6 +39,8 @@ const DRILL: usize = 3;
 const RECENT: usize = 20;
 /// Words a practice test draws from, the richest in costly bigrams.
 const PRACTICE: usize = 150;
+/// Targets a practice test names in its title, costliest first.
+const FOCUS: usize = 3;
 
 const FILES_HELP: &str = "\
 Files (under $OUI_HOME, default ~/.oui):
@@ -95,6 +97,10 @@ enum Cmd {
         /// them -- and the fingering your timing implies.
         #[arg(short, long)]
         geometry: bool,
+        /// Add what --practice targets per language, and the words it
+        /// draws.
+        #[arg(short, long)]
+        practice: bool,
     },
 }
 
@@ -429,9 +435,21 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let store = Store::open()?;
     match cli.cmd {
-        Some(Cmd::Stats { last, source, layout, by, detailed, geometry }) => {
+        Some(Cmd::Stats {
+            last,
+            source,
+            layout,
+            by,
+            detailed,
+            geometry,
+            practice,
+        }) => {
             let view = View { by, detailed, geometry, ..View::default() };
-            stats(&store, last, source.as_deref(), layout, view)
+            stats(&store, last, source.as_deref(), layout, view)?;
+            if practice {
+                practice_summary(&store, last, source.as_deref())?;
+            }
+            Ok(())
         }
         None => {
             let config = Config::load(&store.dir().join("config"))?;
@@ -530,7 +548,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
 
 /// The run's settings, drawing on the passages and history in `store`.
 fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
-    let (source, name) = source(cli, store)?;
+    let (source, name, focus) = source(cli, store)?;
     let limit = limit(cli, &source);
     if matches!(source, Source::Passages { .. }) && !cli.with.is_empty() {
         bail!("--with mixes extras into random words, not --mode text");
@@ -553,6 +571,12 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     };
     if !with.is_empty() {
         what = format!("{what} with {}", with.join(", "));
+    }
+    if !focus.is_empty() {
+        let show =
+            |&(a, b): &(char, char)| format!("{}{}", ui::show(a), ui::show(b));
+        let focus: Vec<String> = focus.iter().map(show).collect();
+        what = format!("{what} · {}", focus.join(" "));
     }
     let mut title = match limit {
         Limit::Words(n) => format!("{what} · {n} words"),
@@ -589,8 +613,10 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
     }
 }
 
-/// The words to type and a name for them.
-fn source(cli: &TestArgs, store: &Store) -> Result<(Source, String)> {
+/// The words to type, a name for them and the bigrams they practise.
+type Words = (Source, String, Vec<(char, char)>);
+
+fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
     if let Some(path) = &cli.file {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -599,13 +625,16 @@ fn source(cli: &TestArgs, store: &Store) -> Result<(Source, String)> {
             bail!("{} has no words to type", path.display());
         }
         let name = path.file_name().unwrap_or(path.as_os_str());
-        return Ok((Source::Text(words), name.to_string_lossy().into_owned()));
+        let name = name.to_string_lossy().into_owned();
+        return Ok((Source::Text(words), name, Vec::new()));
     }
     let language =
         cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
     if cli.practice {
-        let words = practice_words(&language, store)?;
-        return Ok((Source::Random(words), language));
+        let records = select(store.load()?.records, None, Some(&language));
+        let (targets, words) = practice_pool(&language, &records, store)?;
+        let focus = targets.iter().take(FOCUS).map(|t| t.bigram).collect();
+        return Ok((Source::Random(words), language, focus));
     }
     if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
         let texts = store.dir().join("texts");
@@ -621,12 +650,12 @@ fn source(cli: &TestArgs, store: &Store) -> Result<(Source, String)> {
             Mode::Funny => Source::Funny(Chain::new(&passages)),
             _ => Source::passages(passages),
         };
-        return Ok((source, language));
+        return Ok((source, language, Vec::new()));
     }
     let Some(words) = words::language(&language) else {
         return Err(unknown(&language));
     };
-    Ok((Source::Random(words), language))
+    Ok((Source::Random(words), language, Vec::new()))
 }
 
 fn unknown(language: &str) -> anyhow::Error {
@@ -634,25 +663,51 @@ fn unknown(language: &str) -> anyhow::Error {
     anyhow!("unknown language '{language}' (have {})", known.join(", "))
 }
 
-/// The [`PRACTICE`] words richest in the bigrams costing the recorded
-/// tests of `language` the most.
-fn practice_words(language: &str, store: &Store) -> Result<Vec<String>> {
+/// The bigrams costing `records` of `language` the most, and the
+/// [`PRACTICE`] words richest in them.
+fn practice_pool(
+    language: &str,
+    records: &[Record],
+    store: &Store,
+) -> Result<(Vec<Target>, Vec<String>)> {
     let texts = store.dir().join("texts");
     let vocabulary = practice::vocabulary(language, &texts)?;
     if vocabulary.is_empty() {
         return Err(unknown(language));
     }
-    let records = select(store.load()?.records, None, Some(language));
     if records.is_empty() {
         let history = store.history();
         bail!("no {language} tests to practise on in {}", history.display());
     }
-    let targets = practice::targets(&records, &vocabulary);
+    let targets = practice::targets(records, &vocabulary);
     let words = practice::words(&vocabulary, &targets, PRACTICE);
     if words.is_empty() {
         bail!("nothing to practise yet in the {language} tests");
     }
-    Ok(words)
+    Ok((targets, words))
+}
+
+/// What practice targets in each language of the selected tests.
+fn practice_summary(
+    store: &Store,
+    last: Option<NonZeroUsize>,
+    source: Option<&str>,
+) -> Result<()> {
+    let records = select(store.load()?.records, last, source);
+    let mut languages: Vec<&str> =
+        records.iter().map(|r| r.meta.source.as_str()).collect();
+    languages.sort_unstable();
+    languages.dedup();
+    let texts = store.dir().join("texts");
+    for language in languages {
+        if practice::vocabulary(language, &texts)?.is_empty() {
+            continue;
+        }
+        let tests = select(records.clone(), None, Some(language));
+        let (targets, words) = practice_pool(language, &tests, store)?;
+        print!("{}", summary::practice(language, &targets, &words));
+    }
+    Ok(())
 }
 
 fn limit(cli: &TestArgs, source: &Source) -> Limit {
@@ -727,7 +782,8 @@ mod tests {
     #[test]
     fn defaults_to_fifty_english_words() {
         let cli = cli(&[]);
-        let (source, name) = source(&cli, &no_home()).unwrap();
+        let (source, name, focus) = source(&cli, &no_home()).unwrap();
+        assert!(focus.is_empty());
         assert_eq!(name, "english");
         assert_eq!(limit(&cli, &source), Limit::Words(50));
         assert_eq!(cli.layout, None);
@@ -876,6 +932,7 @@ mod tests {
                 by: None,
                 detailed: false,
                 geometry: false,
+                practice: false,
             })
         );
         assert!(parse(&["stats", "-w", "10"]).is_err());
@@ -886,6 +943,8 @@ mod tests {
             g,
             Some(Cmd::Stats { detailed: true, geometry: true, .. })
         ));
+        let p = parse(&["stats", "-p", "-s", "english"]).unwrap().cmd;
+        assert!(matches!(p, Some(Cmd::Stats { practice: true, .. })));
         assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
     }
 
@@ -935,7 +994,7 @@ mod tests {
         let practice = setup(&args, &store).unwrap();
         assert_eq!(
             practice.title,
-            "english practice with punctuation · 9 words"
+            "english practice with punctuation · qu · 9 words"
         );
         assert_eq!(
             (practice.meta.source.as_str(), practice.meta.mode.as_str()),

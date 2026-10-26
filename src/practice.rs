@@ -20,6 +20,8 @@ use crate::words;
 const TARGETS: usize = 16;
 /// Keystrokes a miss costs: the wrong key, a backspace and the retype.
 const MISS: u32 = 3;
+/// At most one word in this many may owe most of its cost to one target.
+const SHARE: usize = 5;
 
 /// A bigram worth practising and the time it costs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +77,8 @@ pub fn targets(records: &[Record], vocabulary: &[String]) -> Vec<Target> {
 }
 
 /// The `n` words of `vocabulary` with the most target cost per keystroke,
-/// the space after them included; ties keep the vocabulary's order.
+/// the space after them included; ties keep the vocabulary's order. A
+/// target leads at most 1/[`SHARE`] of them while others have words left.
 pub fn words(
     vocabulary: &[String],
     targets: &[Target],
@@ -83,17 +86,32 @@ pub fn words(
 ) -> Vec<String> {
     let costs: BTreeMap<(char, char), Duration> =
         targets.iter().map(|t| (t.bigram, t.cost)).collect();
-    let mut scored: Vec<(Duration, &String)> = vocabulary
+    let mut scored: Vec<(Duration, (char, char), &String)> = vocabulary
         .iter()
         .filter_map(|w| {
             let pairs = pairs(w);
-            let cost: Duration =
-                pairs.iter().filter_map(|p| costs.get(p)).sum();
-            (!cost.is_zero()).then(|| (cost / pairs.len() as u32, w))
+            let hit = pairs.iter().filter_map(|p| Some((p, costs.get(p)?)));
+            let lead = hit.clone().rev().max_by_key(|&(_, c)| c)?.0;
+            let cost: Duration = hit.map(|(_, c)| c).sum();
+            Some((cost / pairs.len() as u32, *lead, w))
         })
         .collect();
-    scored.sort_by_key(|&(cost, _)| Reverse(cost));
-    scored.into_iter().take(n).map(|(_, w)| w.clone()).collect()
+    scored.sort_by_key(|&(cost, ..)| Reverse(cost));
+    let cap = n.div_ceil(SHARE);
+    let mut led: BTreeMap<(char, char), usize> = BTreeMap::new();
+    let (mut picked, mut spare) = (Vec::new(), Vec::new());
+    for (_, lead, word) in scored {
+        let count = led.entry(lead).or_default();
+        if *count < cap {
+            *count += 1;
+            picked.push(word.clone());
+        } else {
+            spare.push(word.clone());
+        }
+    }
+    picked.extend(spare);
+    picked.truncate(n);
+    picked
 }
 
 fn pick(ranked: Vec<Target>, marked: &BTreeSet<(char, char)>) -> Vec<Target> {
@@ -258,9 +276,22 @@ mod tests {
         let vocabulary =
             owned(&["the", "and", "quick", "queue", "aqua", "then"]);
         let drill = words(&vocabulary, &targets, 9);
-        assert_eq!(drill, ["aqua", "quick", "queue", "the", "then"]);
-        assert_eq!(words(&vocabulary, &targets, 2), ["aqua", "quick"]);
+        assert_eq!(drill, ["aqua", "quick", "the", "then", "queue"]);
         assert_eq!(words(&vocabulary, &targets, 9), drill, "deterministic");
+    }
+
+    #[test]
+    fn no_target_leads_more_than_its_share_while_others_have_words() {
+        let target = |bigram, ms| Target {
+            bigram,
+            tally: Tally::default(),
+            cost: MS * ms,
+        };
+        let targets = [target(('q', 'u'), 3000), target(('t', 'h'), 300)];
+        let vocabulary = owned(&["quick", "queue", "quit", "the", "then"]);
+        assert_eq!(words(&vocabulary, &targets, 2), ["quit", "the"]);
+        let qu = owned(&["quick", "queue", "quit"]);
+        assert_eq!(words(&qu, &targets, 2), ["quit", "quick"], "no others");
     }
 
     #[test]

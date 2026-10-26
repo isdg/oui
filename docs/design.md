@@ -157,7 +157,11 @@ only target the starts slower than usual. The 16 costliest bigrams, and
 those behind moved or as-one fingering marks, are targets; words of the
 bundled list (else of the passages) are ranked by target cost per
 keystroke, the space after them included, and the top 150 form the pool.
-Ranking is deterministic, ties keeping list order.
+Ranking is deterministic, ties keeping list order. Words are credited to
+the target costing them the most, and no target leads more than a fifth
+of the pool while words led by others remain, so one slow start such as
+`␣ж` cannot fill it. The title names the three costliest targets and
+`oui stats -p` prints them all with the pool.
 
 ## Code layout
 

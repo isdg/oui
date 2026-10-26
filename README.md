@@ -73,9 +73,12 @@ starts, after any other key otherwise), plus three usual gaps per miss. The
 16 costliest, and the pairs behind the fingering marks of `oui stats -g`,
 are the targets; the 150 words of the language's list with the most target
 cost per keystroke are the pool a test draws from at random, honouring
-`-w`, `-t` and `-W`. Practice tests are recorded like any other, so the
-pool follows your typing as it improves. `p` on the results drills as
-usual.
+`-w`, `-t` and `-W`. No target leads more than a fifth of the pool while
+others still have words, and the title names the three costliest.
+Practice tests are recorded like any other, so the pool follows your
+typing as it improves. `p` on the results drills as usual.
+`oui stats -p` lists each language's targets -- pairs, misses, mean gap,
+time lost -- and the words they draw.
 
 ## Reading the results
 
@@ -104,6 +107,7 @@ oui stats -d                  # plus heatmaps and key and bigram rankings
 oui stats -n 20 -s russian    # the last 20 Russian tests
 oui stats --by week           # a table of weeks, WPM plotted per week
 oui stats --geometry          # plus fingers, rows and hand moves
+oui stats --practice          # plus what -p targets, and its words
 ```
 
 `-b, --by day|week|month` groups tests by calendar period (ISO weeks, in

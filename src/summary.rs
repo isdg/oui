@@ -13,12 +13,15 @@ use crate::geometry::{self, Finger, Geometry};
 use crate::history::Record;
 use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
+use crate::practice::Target;
 use crate::stats::{self, Report, Rhythm, Tally};
 use crate::ui::{results, show};
 
 /// Widest the per-test plot grows before neighbouring tests are averaged.
 const PLOT_COLS: usize = 70;
 const PLOT_ROWS: usize = 8;
+/// Widest a line of practice words grows.
+const WORDS_WIDTH: usize = 80;
 /// Columns each ranking takes when printed side by side.
 const RANKING_WIDTH: usize = 24;
 /// Cited tests listed under the plot, most recent first.
@@ -290,6 +293,50 @@ fn symbol(key: Key, marks: &BTreeMap<Key, Marked>) -> char {
     }
 }
 
+/// The bigrams `--practice` targets in `language`, then the words it draws.
+pub fn practice(
+    language: &str,
+    targets: &[Target],
+    words: &[String],
+) -> String {
+    let title = format!("Practice · {language}");
+    let mut out = format!("\n     {}\n", results::rule(&title, 41));
+    let _ = writeln!(
+        out,
+        "     {:<12}{:>6}{:>7}{:>8}{:>8}",
+        "Bigram", "Pairs", "Miss", "Mean", "Cost"
+    );
+    for t in targets {
+        let (a, b) = t.bigram;
+        let miss = 100.0 * t.tally.miss_rate();
+        let mean = t.tally.mean_latency().map_or_else(
+            || "—".to_string(),
+            |d| format!("{} ms", d.as_millis()),
+        );
+        let cost = format!("{:.1} s", t.cost.as_secs_f64());
+        let _ = writeln!(
+            out,
+            "     {:<12}{:>6}{miss:>6.1}%{mean:>8}{cost:>8}",
+            format!("{}{}", show(a), show(b)),
+            t.tally.attempts()
+        );
+    }
+    out.push('\n');
+    let mut line = String::from("    ");
+    for word in words {
+        if line.chars().count() + 1 + word.chars().count() > WORDS_WIDTH {
+            let _ = writeln!(out, "{line}");
+            line = String::from("    ");
+        }
+        line.push(' ');
+        line.push_str(word);
+    }
+    if !words.is_empty() {
+        let _ = writeln!(out, "{line}");
+    }
+    out
+}
+
 fn attempts(rows: &[(String, Tally)]) -> u32 {
     rows.iter().map(|(_, t)| t.attempts()).sum()
 }
@@ -471,6 +518,26 @@ mod tests {
 
     fn summary() -> View {
         View { layout: Layout::Qwerty, ..View::default() }
+    }
+
+    #[test]
+    fn practice_lists_targets_then_wraps_the_words() {
+        let tally = Tally {
+            hits: 9,
+            misses: 1,
+            timed: 9,
+            latency: Duration::from_millis(1800),
+        };
+        let cost = Duration::from_millis(12_340);
+        let targets = [Target { bigram: (' ', 'p'), tally, cost }];
+        let words: Vec<String> = (0..30).map(|i| format!("pp{i}")).collect();
+        let out = practice("english", &targets, &words);
+        assert!(out.contains("── Practice · english"), "{out}");
+        assert!(out.contains("     ␣p              10  10.0%  200 ms  12.3 s"));
+        let lines: Vec<&str> =
+            out.rsplit("\n\n").next().unwrap().lines().collect();
+        assert!(lines.iter().all(|l| l.chars().count() <= WORDS_WIDTH));
+        assert_eq!(lines.join(" ").split_whitespace().count(), 30);
     }
 
     fn detailed() -> View {

@@ -88,7 +88,7 @@ enum Cmd {
         #[arg(short, long)]
         detailed: bool,
         /// Add fingers, rows and hand moves -- same-finger bigrams among
-        /// them.
+        /// them -- and the fingering your timing implies.
         #[arg(short, long)]
         geometry: bool,
     },

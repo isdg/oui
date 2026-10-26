@@ -115,6 +115,12 @@ then per hand move between consecutive keys -- alternating hands, same
 hand, same finger on two keys, the same key twice, or to and from space.
 Same-finger bigrams, the slowest move, are listed by the time they took
 in all.
+Last come the fingers per key, numbered as in typing courses (1–4 left
+pinky to index, 7–0 right index to pinky): the standard board, then per
+layout the one your timing implies. Standard same-finger pairs typed
+quickly, or pairs on different fingers typed as slowly as one finger,
+move a key (`?` where no finger clearly takes it, `≈` where neighbouring
+fingers move as one), each mark listed with the pairs behind it.
 
 `$OUI_HOME` moves `~/.oui` elsewhere.
 
@@ -165,6 +171,7 @@ author, work and year; old French spellings are left out.
 - `src/history.rs` — the `history.jsonl` store.
 - `src/summary.rs` — `oui stats`.
 - `src/geometry.rs` — finger, hand and row per key; tallies over them.
+- `src/fingering.rs` — the fingers your timing implies.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
 - `src/chain.rs` — the word chains behind `--mode funny`.

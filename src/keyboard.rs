@@ -277,6 +277,20 @@ pub fn plain(rows: &[(usize, Vec<Tile>)]) -> Vec<String> {
     rows.iter().map(row).collect()
 }
 
+/// The keys without the space bar, each label followed by `mark(key)`,
+/// as [`plain`] draws tiles.
+pub fn board(layout: Layout, mark: impl Fn(Key) -> char) -> Vec<String> {
+    let rows = layout.rows().iter().enumerate();
+    let row = |(row, keys): (usize, &&[&str])| {
+        let key = |(col, k): (usize, &&str)| {
+            format!(" {}{}", label(k), mark(Key::At { row, col }))
+        };
+        let keys: String = keys.iter().enumerate().map(key).collect();
+        format!("{}{keys}", " ".repeat(STAGGER[row]))
+    };
+    rows.map(row).collect()
+}
+
 /// Tiles as ANSI 256-colour text; untyped keys are dimmed.
 pub fn ansi(rows: &[(usize, Vec<Tile>)]) -> Vec<String> {
     let tile = |t: &Tile| match t.level {
@@ -428,6 +442,22 @@ mod tests {
         let lines = ansi(&tiles(Layout::Qwerty, &heat, Measure::Errors));
         assert!(lines[1].starts_with("  \x1b[48;5;255;38;5;16m Q \x1b[0m"));
         assert!(lines[1].contains("\x1b[2m W \x1b[0m"));
+    }
+
+    #[test]
+    fn boards_mark_each_key_after_its_label() {
+        let lines = board(Layout::Jcuken, |k| match k {
+            Key::At { row: 2, col } => char::from(b'0' + col as u8),
+            _ => '·',
+        });
+        assert_eq!(lines.len(), 4);
+        assert!(lines[2].starts_with("    Ф0 Ы1 В2 А3"), "{lines:?}");
+        assert!(lines[3].ends_with("Ю· .·"), "{lines:?}");
+        assert_eq!(
+            Layout::Jcuken.char_at(Key::At { row: 3, col: 5 }),
+            Some('т')
+        );
+        assert_eq!(Layout::Qwerty.char_at(Key::Space), None);
     }
 
     #[test]

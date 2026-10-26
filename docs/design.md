@@ -159,6 +159,7 @@ src/
   plot.rs      plc-style line chart
   keyboard.rs  layouts, character → key, heat aggregation and glyphs
   geometry.rs  finger, hand and row per key; tallies summed over them
+  fingering.rs the fingers really used, inferred from pair timing
   ui/          typing and results screens (pure render functions)
   main.rs      CLI, terminal, event loop
 ```
@@ -188,7 +189,9 @@ random words, or the whole text for a file; `-t` switches to a timed test.
   tests of the same language.
 - `--geometry` adds the key and bigram tallies summed per finger, row and
   hand move. Fingers follow touch typing on the ANSI board, keyed by
-  physical position, so every layout shares them. Rhythm pools squared
+  physical position, so every layout shares them. The fingering the
+  timing implies is inferred per layout from median gaps between pairs of
+  keys, against the median gap of them all. Rhythm pools squared
   deviations from each test's own mean, so getting faster over months does
   not read as unevenness.
 - `~/.oui/config` defaults every test flag in `plcrc` format; flags win. It

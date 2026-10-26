@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use clap::ValueEnum;
 
-use crate::geometry::Geometry;
+use crate::fingering::{Fingering, Mark, Marked};
+use crate::geometry::{self, Finger, Geometry};
 use crate::history::Record;
-use crate::keyboard::{self, Layout, Measure};
+use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
 use crate::stats::{self, Report, Rhythm, Tally};
 use crate::ui::{results, show};
@@ -24,6 +25,8 @@ const RANKING_WIDTH: usize = 24;
 const RECENT_TEXTS: usize = 10;
 /// Same-finger bigrams listed under the geometry tables.
 const SAME_FINGER_TOP: usize = 8;
+const FINGERS_LEGEND: &str = "1–4 L pinky to index   7–0 R index to pinky   \
+                              ≈ move as one   ? unresolved";
 
 /// Calendar periods `oui stats --by` groups tests into.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +131,7 @@ pub fn render(records: &[Record], view: &View) -> String {
     }
     if view.geometry {
         out.push_str(&geometry_tables(&all, view.layout));
+        out.push_str(&fingering(records, view.layout));
     }
     out
 }
@@ -211,6 +215,79 @@ fn geometry_tables(r: &Report, layout: Layout) -> String {
     let title = "Same-finger bigrams";
     out.push_str(&tally_table(title, "Bigram", "Pairs", &same_finger, pairs));
     out
+}
+
+/// The fingering each layout's tests show, for those with enough of them.
+fn fingering(records: &[Record], layout: Layout) -> String {
+    let infer = |&l: &Layout| {
+        let tests = records.iter().filter(|r| r.meta.layout == l.name());
+        let logs: Vec<_> = tests.map(Record::log).collect();
+        Some((l, Fingering::infer(l, logs.iter().map(Vec::as_slice))?))
+    };
+    let yours: Vec<_> =
+        Layout::value_variants().iter().filter_map(infer).collect();
+    fingering_boards(layout, &yours)
+}
+
+/// The standard fingering on `layout`, then each inferred one with the
+/// pairs behind its marks; the number row only where one is marked.
+fn fingering_boards(layout: Layout, yours: &[(Layout, Fingering)]) -> String {
+    let marked = yours.iter().flat_map(|(_, f)| f.marks.keys());
+    let number =
+        marked.into_iter().any(|k| matches!(k, Key::At { row: 0, .. }));
+    let board = |title: &str, layout, marks: &BTreeMap<Key, Marked>| {
+        let mut out = format!("\n          fingers — {title}\n\n");
+        let rows = keyboard::board(layout, |k| symbol(k, marks));
+        for row in &rows[usize::from(!number)..] {
+            let _ = writeln!(out, "     {row}");
+        }
+        out
+    };
+    let mut out = board("standard", layout, &BTreeMap::new());
+    let _ = writeln!(out, "\n     {FINGERS_LEGEND}");
+    for (layout, fingering) in yours {
+        let median = millis(fingering.baseline);
+        let title = format!("yours ({}), median {median} ms", layout.name());
+        out.push_str(&board(&title, *layout, &fingering.marks));
+        out.push('\n');
+        let label = |k| layout.char_at(k).unwrap_or(' ');
+        for (&key, marked) in &fingering.marks {
+            let pairs: Vec<String> = marked
+                .evidence
+                .iter()
+                .map(|p| {
+                    let (a, b) = (label(p.keys.0), label(p.keys.1));
+                    format!("{a}{b} {} ms ×{}", millis(p.median), p.count)
+                })
+                .collect();
+            let name = label(key).to_uppercase();
+            let mark = symbol(key, &fingering.marks);
+            let line = format!("     {name}{mark}  {}", pairs.join(" · "));
+            let _ = writeln!(out, "{}", line.trim_end());
+        }
+    }
+    out
+}
+
+/// A key's finger as typing courses number them, or its mark.
+fn symbol(key: Key, marks: &BTreeMap<Key, Marked>) -> char {
+    let digit = |finger| match finger {
+        Finger::LeftPinky => '1',
+        Finger::LeftRing => '2',
+        Finger::LeftMiddle => '3',
+        Finger::LeftIndex => '4',
+        Finger::RightIndex => '7',
+        Finger::RightMiddle => '8',
+        Finger::RightRing => '9',
+        Finger::RightPinky => '0',
+        Finger::Thumb => ' ',
+    };
+    match marks.get(&key).map(|m| m.mark) {
+        Some(Mark::Moved(finger)) => digit(finger),
+        Some(Mark::AsOne) => '≈',
+        Some(Mark::Unsure) => '?',
+        None => geometry::finger(key).map_or(' ', digit),
+    }
 }
 
 fn attempts(rows: &[(String, Tally)]) -> u32 {
@@ -373,6 +450,10 @@ fn mean(values: &[f64]) -> f64 {
 /// The date part of an RFC 3339 timestamp.
 fn day(at: &str) -> &str {
     at.get(..10).unwrap_or(at)
+}
+
+fn millis(d: Duration) -> u128 {
+    (d + Duration::from_micros(500)).as_millis()
 }
 
 fn hms(d: Duration) -> String {
@@ -573,6 +654,81 @@ mod tests {
         let out = render(&records, &View { geometry: true, ..summary() });
         let tail = out.split("── Same-finger bigrams").nth(1).unwrap();
         assert!(tail.contains("(none)"), "{out}");
+    }
+
+    #[test]
+    fn geometry_ends_on_the_standard_fingering_alone_when_data_is_thin() {
+        let records = [record("fj", "fj", "2026-10-24T09:00:00+02:00")];
+        let out = render(&records, &View { geometry: true, ..summary() });
+        let tail = out.split("fingers — standard").nth(1).unwrap();
+        assert!(tail.contains("\n          Z1 X2 C3 V4 B4 N7"), "{out}");
+        assert!(tail.contains("≈ move as one   ? unresolved"), "{out}");
+        assert!(!out.contains("yours") && !out.contains("`1"), "{out}");
+    }
+
+    #[test]
+    fn inferred_boards_mark_keys_and_list_their_evidence() {
+        use crate::fingering::Pair;
+        let (q, j) = (Layout::Qwerty, Layout::Jcuken);
+        let ms = Duration::from_millis;
+        let key = |l: Layout, c| l.locate(c).unwrap();
+        let pair = |l, a, b, median, count| Pair {
+            keys: (key(l, a), key(l, b)),
+            median: ms(median),
+            count,
+        };
+        let marked = |mark, evidence| Marked { mark, evidence };
+        let qwerty = Fingering {
+            baseline: ms(134),
+            marks: BTreeMap::from([
+                (
+                    key(q, 'b'),
+                    marked(
+                        Mark::Moved(Finger::RightIndex),
+                        vec![
+                            pair(q, 'm', 'b', 234, 17),
+                            pair(q, 'u', 'b', 209, 9),
+                        ],
+                    ),
+                ),
+                (key(q, 'i'), marked(Mark::AsOne, vec![])),
+            ]),
+        };
+        let jcuken = Fingering {
+            baseline: ms(126),
+            marks: BTreeMap::from([(
+                key(j, 'т'),
+                marked(Mark::Unsure, vec![pair(j, 'т', 'о', 79, 123)]),
+            )]),
+        };
+        let out = fingering_boards(q, &[(q, qwerty), (j, jcuken)]);
+        for needle in [
+            "fingers — standard\n\n        Q1 W2 E3 R4 T4 Y7 U7 I8 O9 P0",
+            "fingers — yours (qwerty), median 134 ms\n\n        Q1",
+            "        Q1 W2 E3 R4 T4 Y7 U7 I≈ O9 P0",
+            "          Z1 X2 C3 V4 B7 N7 M7 ,8",
+            "\n     I≈\n     B7  mb 234 ms ×17 · ub 209 ms ×9\n",
+            "fingers — yours (jcuken), median 126 ms",
+            "          Я1 Ч2 С3 М4 И4 Т? Ь7",
+            "\n     Т?  то 79 ms ×123\n",
+        ] {
+            assert!(out.contains(needle), "missing {needle:?}\n{out}");
+        }
+        assert!(!out.contains("`1"), "no number row without marks on it");
+        let five = Fingering {
+            marks: BTreeMap::from([(
+                key(q, '5'),
+                marked(Mark::Unsure, vec![]),
+            )]),
+            ..Fingering::default()
+        };
+        let out = fingering_boards(q, &[(q, five)]);
+        assert_eq!(
+            out.matches("\n      `1 11 22 33 44 54 67").count(),
+            1,
+            "{out}"
+        );
+        assert!(out.contains("\n      `1 11 22 33 44 5? 67"), "{out}");
     }
 
     #[test]

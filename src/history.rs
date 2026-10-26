@@ -94,10 +94,13 @@ impl Record {
         }
     }
 
+    pub fn log(&self) -> Vec<Keystroke> {
+        self.keys.iter().map(Keystroke::from).collect()
+    }
+
     /// The full report, recomputed from the stored keystrokes.
     pub fn report(&self) -> Report {
-        let log: Vec<Keystroke> =
-            self.keys.iter().map(Keystroke::from).collect();
+        let log = self.log();
         let elapsed = Duration::from_millis(self.elapsed_ms);
         Report::from_parts(&log, &self.words, &self.typed, elapsed)
     }

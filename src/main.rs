@@ -47,7 +47,7 @@ Files (under $OUI_HOME, default ~/.oui):
   config                 defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # or text, funny
+                           mode     = words        # or text, classics, funny
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -522,7 +522,9 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     let mode = pick(cli.mode, config.mode, from_config && !cli.practice);
     let with = match cli.with.is_empty() {
         false => cli.with.clone(),
-        true if from_config && mode != Some(Mode::Text) => config.with.clone(),
+        true if from_config && !mode.is_some_and(Mode::passages) => {
+            config.with.clone()
+        }
         true => Vec::new(),
     };
     let (words, time) = match cli.words.is_some() || cli.time.is_some() {
@@ -551,7 +553,7 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     let (source, name, focus) = source(cli, store)?;
     let limit = limit(cli, &source);
     if matches!(source, Source::Passages { .. }) && !cli.with.is_empty() {
-        bail!("--with mixes extras into random words, not --mode text");
+        bail!("--with mixes extras into random words, not passages");
     }
     let mut extras = cli.with.clone();
     extras.sort();
@@ -562,12 +564,12 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
         _ if cli.practice => "practice",
         Source::Random(_) => "words",
         Source::Text(_) => "file",
-        Source::Passages { .. } => "text",
+        Source::Passages { .. } => cli.mode.unwrap_or(Mode::Text).name(),
         Source::Funny(_) => "funny",
     };
     let mut what = match mode {
-        "text" | "funny" | "practice" => format!("{name} {mode}"),
-        _ => name.clone(),
+        "words" | "file" => name.clone(),
+        _ => format!("{name} {mode}"),
     };
     if !with.is_empty() {
         what = format!("{what} with {}", with.join(", "));
@@ -635,6 +637,13 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         let (targets, words) = practice_pool(&language, &records, store)?;
         let focus = targets.iter().take(FOCUS).map(|t| t.bigram).collect();
         return Ok((Source::Random(words), language, focus));
+    }
+    if cli.mode == Some(Mode::Classics) {
+        let passages = words::classics(&language);
+        if passages.is_empty() {
+            bail!("no classics for '{language}'");
+        }
+        return Ok((Source::passages(passages), language, Vec::new()));
     }
     if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
         let texts = store.dir().join("texts");
@@ -861,6 +870,30 @@ mod tests {
     }
 
     #[test]
+    fn classics_mode_types_only_the_bundled_passages() {
+        let tmp = TempDir::new("classics");
+        let store = Store::at(&tmp.0);
+        let mine = tmp.0.join("texts/french");
+        fs::create_dir_all(&mine).unwrap();
+        fs::write(mine.join("a.txt"), "[[Moi]]\nun deux").unwrap();
+        let args = cli(&["-m", "classics", "-l", "french"]);
+        let classics = setup(&args, &store).unwrap();
+        assert_eq!(classics.title, "french classics · one passage");
+        assert_eq!(classics.meta.mode, "classics");
+        let Source::Passages { cites, .. } = &classics.source else {
+            unreachable!()
+        };
+        assert_eq!(cites.len(), words::classics("french").len());
+        assert!(cites.iter().all(|c| c.as_deref() != Some("Moi")));
+        let err = |args: &[&str]| {
+            setup(&cli(args), &store).err().unwrap().to_string()
+        };
+        assert!(err(&["-m", "classics", "-W", "p"]).starts_with("--with"));
+        assert!(err(&["-m", "classics", "-l", "german"])
+            .starts_with("no classics for 'german'"));
+    }
+
+    #[test]
     fn text_mode_refuses_extras_and_unknown_texts() {
         let err = |args: &[&str]| {
             setup(&cli(args), &no_home()).err().unwrap().to_string()
@@ -900,6 +933,7 @@ mod tests {
         assert_eq!((file.language, file.with), (None, vec![]));
         let text = merge(&cli(&["-m", "text"]), &config);
         assert!(text.with.is_empty());
+        assert!(merge(&cli(&["-m", "classics"]), &config).with.is_empty());
         assert!(setup(&text, &no_home()).is_ok(), "config extras are no error");
         let config = oui::config::parse("mode = text").unwrap();
         assert!(

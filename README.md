@@ -21,6 +21,7 @@ oui                       # 50 random English words
 oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -W p,n                # with punctuation and numbers mixed in
 oui -m text -l french     # a passage of real French prose
+oui -m classics           # a passage of the bundled classics only
 oui -m funny              # words that follow each other as in prose
 oui -p                    # words that drill your costliest bigrams
 oui -t 60                 # a timed test of 60 seconds
@@ -32,7 +33,7 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default); `text`: a random passage of real prose; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose, bundled or your own; `classics`: a passage of the bundled classics only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
 | `-p, --practice` | Random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
@@ -40,7 +41,7 @@ oui stats                 # everything recorded so far
 | `-k, --layout` | Heatmap layout: `qwerty` or `jcuken` (alias `йцукен`); detected from the words when omitted. |
 | `-i, --incognito` | Record nothing: the tests stay out of the history and `oui stats`. |
 
-Text mode bundles openings of public-domain classics (Austen, Dickens,
+Text and classics modes bundle openings of public-domain classics (Austen, Dickens,
 Proust, Hugo, Толстой, Пушкин, Гоголь…). Curly quotes, `«»`, em dashes and the
 like are folded into what a keyboard types.
 
@@ -149,7 +150,7 @@ same format as `plcrc`; flags override it. Unknown keys are errors.
 
 ```
 language = russian
-mode     = words          # or text, funny
+mode     = words          # or text, classics, funny
 with     = punctuation, numbers
 words    = 50             # or time = 60
 layout   = auto           # or qwerty, jcuken

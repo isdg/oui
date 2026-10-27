@@ -16,10 +16,28 @@ pub enum Mode {
     Words,
     /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
     Text,
+    /// Passages of the bundled public-domain classics only.
+    Classics,
     /// Words that follow each other as in that prose: phrases that almost
     /// mean something.
     #[value(alias = "funnywords")]
     Funny,
+}
+
+impl Mode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Words => "words",
+            Mode::Text => "text",
+            Mode::Classics => "classics",
+            Mode::Funny => "funny",
+        }
+    }
+
+    /// Whether the mode types whole passages, which take no extras.
+    pub fn passages(self) -> bool {
+        matches!(self, Mode::Text | Mode::Classics)
+    }
 }
 
 /// Bundled word lists, keyed by the name `--language` takes.
@@ -33,12 +51,12 @@ pub fn language(name: &str) -> Option<Vec<String>> {
     LANGUAGES.iter().find(|(n, _)| *n == name).map(|(_, text)| split(text))
 }
 
-/// Bundled passages for `--mode text`, separated by blank lines: excerpts of
-/// public-domain classics, each cited.
-pub const TEXTS: [(&str, &str); 3] = [
-    ("english", include_str!("../resources/texts/english.txt")),
-    ("french", include_str!("../resources/texts/french.txt")),
-    ("russian", include_str!("../resources/texts/russian.txt")),
+/// Bundled passages for `--mode classics` and `text`, separated by blank
+/// lines: excerpts of public-domain classics, each cited.
+pub const CLASSICS: [(&str, &str); 3] = [
+    ("english", include_str!("../resources/classics/english.txt")),
+    ("french", include_str!("../resources/classics/french.txt")),
+    ("russian", include_str!("../resources/classics/russian.txt")),
 ];
 
 pub fn split(text: &str) -> Vec<String> {
@@ -96,11 +114,16 @@ fn citation(line: &str) -> Option<&str> {
     Some(inner.trim())
 }
 
+/// The bundled classics in `language`, if any.
+pub fn classics(language: &str) -> Vec<Passage> {
+    let bundled = CLASSICS.iter().find(|(n, _)| *n == language);
+    bundled.map_or_else(Vec::new, |(_, text)| passages(text))
+}
+
 /// Passages for `language`: the bundled ones, then those of every `.txt`
 /// file in `dir/<language>/`, in name order.
 pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Passage>> {
-    let bundled = TEXTS.iter().find(|(n, _)| *n == language);
-    let mut out = bundled.map_or_else(Vec::new, |(_, text)| passages(text));
+    let mut out = classics(language);
     let dir = dir.join(language);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -272,6 +295,14 @@ mod tests {
     }
 
     #[test]
+    fn modes_are_named_as_the_cli_takes_them() {
+        for &mode in Mode::value_variants() {
+            let value = mode.to_possible_value().unwrap();
+            assert_eq!(mode.name(), value.get_name());
+        }
+    }
+
+    #[test]
     fn passages_split_on_blank_lines() {
         let text = "one two\nthree\n\n\n  \nfour\r\n\r\nfive six\n";
         assert_eq!(
@@ -302,7 +333,7 @@ mod tests {
 
     #[test]
     fn every_bundled_passage_is_cited() {
-        for (name, text) in TEXTS {
+        for (name, text) in CLASSICS {
             let passages = passages(text);
             assert!(passages.len() >= 100, "{name} has {}", passages.len());
             let uncited = passages.iter().find(|p| p.cite.is_none());
@@ -314,7 +345,7 @@ mod tests {
     #[test]
     fn every_bundled_character_has_a_key() {
         let lists = LANGUAGES.iter().map(|&(name, text)| (name, split(text)));
-        let texts = TEXTS.iter().map(|&(name, text)| {
+        let texts = CLASSICS.iter().map(|&(name, text)| {
             (name, passages(text).into_iter().flat_map(|p| p.words).collect())
         });
         // Russian prose quotes the odd Latin name or apostrophe, typed by
@@ -343,7 +374,7 @@ mod tests {
         fs::write(dir.join("french/b.txt"), b).unwrap();
         fs::write(dir.join("french/a.txt"), "un").unwrap();
         fs::write(dir.join("french/notes.md"), "ignored").unwrap();
-        let bundled = passages(TEXTS[1].1).len();
+        let bundled = classics("french").len();
         let all = load_passages("french", &dir).unwrap();
         assert_eq!(all.len(), bundled + 3);
         assert_eq!(

@@ -520,6 +520,7 @@ fn mode_colour(mode: &str) -> u8 {
     match mode {
         "words" => 66,
         "text" => 101,
+        "classics" => 95,
         "funny" => 138,
         "practice" => 103,
         "file" => 65,

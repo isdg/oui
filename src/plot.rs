@@ -1,6 +1,9 @@
 //! Line chart in the style of `plc stat`: a stepped box-drawing line, one
 //! column per sample, a right-aligned label on every row.
 
+use std::fmt::Write as _;
+use std::ops::Range;
+
 /// Render `values` as `height + 1` lines: `height` plotted rows, each with
 /// its label, then the bottom axis. `max` is the top of the y-axis.
 pub fn line_chart(
@@ -73,12 +76,41 @@ pub fn line_chart_from(
 
 /// Average `values` down into at most `width` columns.
 pub fn resample(values: &[f64], width: usize) -> Vec<f64> {
-    if width == 0 || values.len() <= width {
-        return values.to_vec();
-    }
-    let edge = |i: usize| i * values.len() / width;
     let mean = |s: &[f64]| s.iter().sum::<f64>() / s.len() as f64;
-    (0..width).map(|i| mean(&values[edge(i)..edge(i + 1)])).collect()
+    buckets(values.len(), width).map(|b| mean(&values[b])).collect()
+}
+
+/// The index ranges [`resample`] averages `len` samples over: one per
+/// sample when they fit in `width` columns.
+pub fn buckets(len: usize, width: usize) -> impl Iterator<Item = Range<usize>> {
+    let width = if width == 0 { len } else { width.min(len) };
+    let edge = move |i: usize| i * len / width;
+    (0..width).map(move |i| edge(i)..edge(i + 1))
+}
+
+/// `line` with the characters from `skip` on drawn in the ANSI 256
+/// colours of `colours`, one per character; `None` and blanks stay plain.
+pub fn tint(line: &str, skip: usize, colours: &[Option<u8>]) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut open = None;
+    for (i, c) in line.chars().enumerate() {
+        let colour = i.checked_sub(skip).and_then(|i| *colours.get(i)?);
+        let colour = colour.filter(|_| c != ' ');
+        if colour != open {
+            if open.is_some() {
+                out.push_str("\x1b[0m");
+            }
+            if let Some(n) = colour {
+                let _ = write!(out, "\x1b[38;5;{n}m");
+            }
+            open = colour;
+        }
+        out.push(c);
+    }
+    if open.is_some() {
+        out.push_str("\x1b[0m");
+    }
+    out
 }
 
 /// The x-axis under a chart of `cols` columns, indented by `indent`: a mark
@@ -142,6 +174,24 @@ mod tests {
     fn resample_averages_into_buckets() {
         assert_eq!(resample(&[1.0, 3.0, 5.0, 7.0], 2), [2.0, 6.0]);
         assert_eq!(resample(&[1.0, 2.0], 10), [1.0, 2.0]);
+    }
+
+    #[test]
+    fn buckets_split_samples_as_resample_does() {
+        let b: Vec<_> = buckets(5, 2).collect();
+        assert_eq!(b, [0..2, 2..5]);
+        assert_eq!(buckets(2, 10).collect::<Vec<_>>(), [0..1, 1..2]);
+        assert_eq!(buckets(0, 3).count(), 0);
+    }
+
+    #[test]
+    fn tint_colours_runs_past_the_label() {
+        let colours = [Some(1), Some(1), Some(2), Some(2), None];
+        assert_eq!(
+            tint("7 ┤●─ ╮╰", 3, &colours),
+            "7 ┤\x1b[38;5;1m●─\x1b[0m \x1b[38;5;2m╮\x1b[0m╰"
+        );
+        assert_eq!(tint("ab", 0, &[]), "ab");
     }
 
     #[test]

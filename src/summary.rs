@@ -118,14 +118,22 @@ pub fn render(records: &[Record], view: &View) -> String {
     }
 
     match view.by {
-        None => out.push_str(&wpm_plot("per completed test", &wpms)),
+        None => {
+            let modes: Vec<&str> = records
+                .iter()
+                .filter(|r| r.completed)
+                .map(|r| r.meta.mode.as_str())
+                .collect();
+            let modes = view.colour.then_some(modes.as_slice());
+            out.push_str(&wpm_plot("per completed test", &wpms, modes));
+        }
         Some(period) => {
             let groups = group(records, period);
             out.push_str(&period_table(&groups, period));
             let means: Vec<f64> =
                 groups.iter().filter_map(|(_, g)| completed_mean(g)).collect();
             let title = format!("mean per {}", period.name());
-            out.push_str(&wpm_plot(&title, &means));
+            out.push_str(&wpm_plot(&title, &means, None));
         }
     }
     out.push_str(&recent_texts(records));
@@ -434,7 +442,9 @@ fn capitalise(word: &str) -> String {
         .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
-fn wpm_plot(title: &str, wpms: &[f64]) -> String {
+/// The WPM trend; with `modes`, one per value, each column is drawn in
+/// the colour of the mode most of its tests were in, under a legend.
+fn wpm_plot(title: &str, wpms: &[f64], modes: Option<&[&str]>) -> String {
     let mut out = format!("\n          wpm — {title}\n\n");
     if wpms.is_empty() {
         out.push_str("          (no data)\n");
@@ -446,14 +456,65 @@ fn wpm_plot(title: &str, wpms: &[f64]) -> String {
     // From the slowest value's ten, not zero: a trend spans a few WPM.
     let lo = values.iter().copied().min().unwrap_or(0) / 10 * 10;
     let fmt = |v: u64| v.to_string();
-    for line in plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt) {
+    let label = max.max(lo + 1).to_string().len().max(lo.to_string().len());
+    let columns: Vec<Option<u8>> = match modes {
+        Some(modes) => plot::buckets(modes.len(), PLOT_COLS)
+            .map(|b| Some(mode_colour(dominant(&modes[b]))))
+            .collect(),
+        None => Vec::new(),
+    };
+    let lines = plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt);
+    for (row, line) in lines.iter().enumerate() {
+        let line = match row < PLOT_ROWS {
+            true => plot::tint(line, label + 2, &columns),
+            false => line.clone(),
+        };
         let _ = writeln!(out, "     {line}");
     }
-    let label = max.max(lo + 1).to_string().len().max(lo.to_string().len());
     let per_col = wpms.len() as f64 / values.len() as f64;
     let axis = plot::axis(label + 2, values.len(), per_col);
     let _ = writeln!(out, "{}", format!("     {axis}").trim_end());
+    if let Some(modes) = modes {
+        let mut seen: Vec<&str> = Vec::new();
+        for &mode in modes {
+            if !seen.contains(&mode) {
+                seen.push(mode);
+            }
+        }
+        let key = |m: &&str| {
+            plot::tint(&format!("● {m}"), 0, &[Some(mode_colour(m))])
+        };
+        let keys: Vec<String> = seen.iter().map(key).collect();
+        let _ =
+            writeln!(out, "\n{}{}", " ".repeat(label + 7), keys.join("   "));
+    }
     out
+}
+
+/// The mode most of `modes` are in; ties go to the earliest.
+fn dominant<'a>(modes: &[&'a str]) -> &'a str {
+    let count = |m: &&str| modes.iter().filter(|n| *n == m).count();
+    let mut best = "";
+    let mut most = 0;
+    for mode in modes {
+        let n = count(mode);
+        if n > most {
+            (best, most) = (mode, n);
+        }
+    }
+    best
+}
+
+/// A muted ANSI 256 colour per kind of test, so no mode outshouts another.
+fn mode_colour(mode: &str) -> u8 {
+    match mode {
+        "words" => 109,
+        "text" => 144,
+        "funny" => 181,
+        "practice" => 146,
+        "file" => 152,
+        _ => 248,
+    }
 }
 
 fn heatmap(
@@ -581,6 +642,32 @@ mod tests {
     fn plot_without_completed_tests_says_so() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
         assert!(render(&records, &summary()).contains("(no data)"));
+    }
+
+    #[test]
+    fn colour_draws_each_test_in_its_mode() {
+        let at = |mode: &str, at| {
+            let mut r = record("ab", "ab", at);
+            r.meta.mode = mode.into();
+            r
+        };
+        let records = [
+            at("words", "2026-10-24T08:00:00+02:00"),
+            at("text", "2026-10-24T09:00:00+02:00"),
+        ];
+        assert!(!render(&records, &summary()).contains('\x1b'));
+        let out = render(&records, &View { colour: true, ..summary() });
+        assert!(out.contains("\x1b[38;5;109m●"), "{out}");
+        assert!(out.contains("\x1b[38;5;144m"), "{out}");
+        assert!(out.contains("\x1b[38;5;109m●\x1b[0m words   "));
+        let by = View { colour: true, by: Some(Period::Day), ..summary() };
+        assert!(!render(&records, &by).contains("● words"));
+    }
+
+    #[test]
+    fn the_commonest_mode_names_a_column() {
+        assert_eq!(dominant(&["text", "words", "words"]), "words");
+        assert_eq!(dominant(&["funny", "text"]), "funny", "ties go first");
     }
 
     #[test]

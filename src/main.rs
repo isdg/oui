@@ -48,7 +48,7 @@ Files (under $OUI_HOME, default ~/.oui):
   config                 defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # or text, classics, funny
+                           mode     = words        # text, classics, feed, funny
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -56,7 +56,10 @@ Files (under $OUI_HOME, default ~/.oui):
                          and --practice
   texts/<language>/*.txt your own passages for --mode text, blank-line
                          separated; a [[Author, Work]] line cites those
-                         after it";
+                         after it
+  feed/<language>.txt    passages `oui feed` draws from a feed archive, for
+                         --mode feed and text; feed/readme.txt lists the
+                         articles used";
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
@@ -118,7 +121,7 @@ struct TestArgs {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
     /// Language to type: english (default), french or russian, or any with
-    /// texts in ~/.oui/texts/<language>/ for --mode text.
+    /// texts in ~/.oui/texts/<language>/ or a feed for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
     /// Random words (default), or passages of real prose.
@@ -672,9 +675,21 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         }
         return Ok((Source::passages(passages), language, Vec::new()));
     }
+    let feed = store.dir().join("feed");
+    if cli.mode == Some(Mode::Feed) {
+        let passages = words::feed(&language, &feed)?;
+        if passages.is_empty() {
+            bail!(
+                "no feed for '{language}' in {} (build it with `oui feed DIR`)",
+                feed.display()
+            );
+        }
+        return Ok((Source::passages(passages), language, Vec::new()));
+    }
     if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
         let texts = store.dir().join("texts");
-        let passages = words::load_passages(&language, &texts)?;
+        let mut passages = words::load_passages(&language, &texts)?;
+        passages.extend(words::feed(&language, &feed)?);
         if passages.is_empty() {
             let dir = texts.join(&language);
             bail!(
@@ -921,6 +936,41 @@ mod tests {
     }
 
     #[test]
+    fn feed_mode_types_what_oui_feed_wrote() {
+        let tmp = TempDir::new("feed");
+        let store = Store::at(&tmp.0);
+        let err = |args: &[&str]| {
+            setup(&cli(args), &store).err().unwrap().to_string()
+        };
+        assert!(err(&["-m", "feed"]).starts_with("no feed for 'english'"));
+        fs::create_dir_all(tmp.0.join("feed")).unwrap();
+        let feed = "[[blog, Post (2026)]]\none two three\n\nfour five\n";
+        fs::write(tmp.0.join("feed/english.txt"), feed).unwrap();
+        let mine = tmp.0.join("texts/english");
+        fs::create_dir_all(&mine).unwrap();
+        fs::write(mine.join("a.txt"), "[[Moi]]\nsix seven").unwrap();
+
+        let fed = setup(&cli(&["-m", "feed"]), &store).unwrap();
+        assert_eq!(fed.title, "english feed · one passage");
+        assert_eq!(fed.meta.mode, "feed");
+        let Source::Passages { cites, .. } = &fed.source else {
+            unreachable!()
+        };
+        let post = Some("blog, Post (2026)".to_string());
+        assert_eq!(cites, &vec![post; 2]);
+        assert!(err(&["-m", "feed", "-W", "p"]).starts_with("--with"));
+
+        let all = setup(&cli(&["-m", "text"]), &store).unwrap();
+        let Source::Passages { cites, .. } = &all.source else {
+            unreachable!()
+        };
+        let classics = words::classics("english").len();
+        assert_eq!(cites.len(), classics + 3, "classics, texts and feed");
+        assert_eq!(cites[classics].as_deref(), Some("Moi"));
+        assert_eq!(cites[classics + 2].as_deref(), Some("blog, Post (2026)"));
+    }
+
+    #[test]
     fn text_mode_refuses_extras_and_unknown_texts() {
         let err = |args: &[&str]| {
             setup(&cli(args), &no_home()).err().unwrap().to_string()
@@ -973,7 +1023,7 @@ mod tests {
         use clap::CommandFactory;
         let help = Cli::command().render_long_help().to_string();
         for needle in
-            ["config", "history.jsonl", "texts/<language>/", "with     ="]
+            ["config", "history.jsonl", "texts/<language>/", "feed/", "with  "]
         {
             assert!(help.contains(needle), "help lacks {needle:?}\n{help}");
         }

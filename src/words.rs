@@ -14,10 +14,12 @@ use crate::chain::Chain;
 pub enum Mode {
     /// Random words from the language's list.
     Words,
-    /// Passages of real prose, bundled or from ~/.oui/texts/<language>/.
+    /// Passages of real prose: the classics, your texts and your feed.
     Text,
     /// Passages of the bundled public-domain classics only.
     Classics,
+    /// Passages `oui feed` drew from your feed reader into ~/.oui/feed/.
+    Feed,
     /// Words that follow each other as in that prose: phrases that almost
     /// mean something.
     #[value(alias = "funnywords")]
@@ -30,13 +32,14 @@ impl Mode {
             Mode::Words => "words",
             Mode::Text => "text",
             Mode::Classics => "classics",
+            Mode::Feed => "feed",
             Mode::Funny => "funny",
         }
     }
 
     /// Whether the mode types whole passages, which take no extras.
     pub fn passages(self) -> bool {
-        matches!(self, Mode::Text | Mode::Classics)
+        matches!(self, Mode::Text | Mode::Classics | Mode::Feed)
     }
 }
 
@@ -143,6 +146,16 @@ pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Passage>> {
         out.extend(passages(&text));
     }
     Ok(out)
+}
+
+/// The passages `oui feed` wrote for `language` into `dir`, if any.
+pub fn feed(language: &str, dir: &Path) -> Result<Vec<Passage>> {
+    let path = dir.join(format!("{language}.txt"));
+    match fs::read_to_string(&path) {
+        Ok(text) => Ok(passages(&text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

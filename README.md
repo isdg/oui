@@ -22,6 +22,7 @@ oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -W p,n                # with punctuation and numbers mixed in
 oui -m text -l french     # a passage of real French prose
 oui -m classics           # a passage of the bundled classics only
+oui -m feed               # a passage of your feed (see Feed)
 oui -m funny              # words that follow each other as in prose
 oui -p                    # words that drill your costliest bigrams
 oui -t 60                 # a timed test of 60 seconds
@@ -33,7 +34,7 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default); `text`: a random passage of real prose, bundled or your own; `classics`: a passage of the bundled classics only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and your feed; `classics`: the bundled classics only; `feed`: your feed only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
 | `-p, --practice` | Random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
@@ -150,7 +151,7 @@ same format as `plcrc`; flags override it. Unknown keys are errors.
 
 ```
 language = russian
-mode     = words          # or text, classics, funny
+mode     = words          # or text, classics, feed, funny
 with     = punctuation, numbers
 words    = 50             # or time = 60
 layout   = auto           # or qwerty, jcuken
@@ -184,8 +185,9 @@ most three come from one article. `~/.oui/feed/readme.txt` explains the
 directory, logs each run (date, articles, passages per language, source)
 and lists every article used, one tab-separated line each: date,
 languages, feed, guid or url, title. Running it again appends only the
-articles not listed yet. The articles stay their authors' copyright, so
-the feed is built locally and never bundled.
+articles not listed yet. `-m feed` types these passages alone, `-m text`
+among the classics and your texts. The articles stay their authors'
+copyright, so the feed is built locally and never bundled.
 
 ## Bundled words and texts
 

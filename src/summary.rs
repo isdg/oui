@@ -518,12 +518,12 @@ fn dominant<'a>(modes: &[&'a str]) -> &'a str {
 /// A muted ANSI 256 colour per kind of test, so no mode outshouts another.
 fn mode_colour(mode: &str) -> u8 {
     match mode {
-        "words" => 109,
-        "text" => 144,
-        "funny" => 181,
-        "practice" => 146,
-        "file" => 152,
-        _ => 248,
+        "words" => 66,
+        "text" => 101,
+        "funny" => 138,
+        "practice" => 103,
+        "file" => 65,
+        _ => 243,
     }
 }
 
@@ -667,9 +667,9 @@ mod tests {
         ];
         assert!(!render(&records, &summary()).contains('\x1b'));
         let out = render(&records, &View { colour: true, ..summary() });
-        assert!(out.contains("\x1b[38;5;109m●"), "{out}");
-        assert!(out.contains("\x1b[38;5;144m"), "{out}");
-        assert!(out.contains("\x1b[38;5;109m●\x1b[0m words   "));
+        assert!(out.contains("\x1b[38;5;66m●"), "{out}");
+        assert!(out.contains("\x1b[38;5;101m"), "{out}");
+        assert!(out.contains("\x1b[38;5;66m●\x1b[0m words   "));
     }
 
     #[test]
@@ -689,9 +689,9 @@ mod tests {
         assert!(!render(&records, &by).contains('\x1b'));
         let out = render(&records, &View { colour: true, ..by });
         let mean = out.split("mean per day").nth(1).unwrap();
-        assert!(mean.contains("\x1b[38;5;144m●"), "{out}");
-        assert!(mean.contains("\x1b[38;5;109m─"), "{out}");
-        assert!(mean.contains("\x1b[38;5;144m●\x1b[0m text   "));
+        assert!(mean.contains("\x1b[38;5;101m●"), "{out}");
+        assert!(mean.contains("\x1b[38;5;66m─"), "{out}");
+        assert!(mean.contains("\x1b[38;5;101m●\x1b[0m text   "));
         assert!(mean.ends_with("m words\n"), "only drawn modes listed");
     }
 

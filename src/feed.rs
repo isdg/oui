@@ -3,7 +3,12 @@
 //! the articles used, so later runs add only new ones.
 
 use std::collections::{BTreeMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 
 use crate::keyboard::Layout;
 use crate::words::{self, LANGUAGES};
@@ -18,6 +23,11 @@ const COMMON: usize = 100;
 /// Share of a passage's words among a language's common ones for it to
 /// count as that language; prose runs at 0.4 or more.
 const RECOGNISED: f64 = 0.25;
+/// Columns the passages are wrapped at.
+const WIDTH: usize = 76;
+
+pub const README: &str = "readme.txt";
+
 /// An article of the archive, as its front matter describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Article {
@@ -365,6 +375,216 @@ pub fn passages(
     kept.map(|(_, p)| p).collect()
 }
 
+/// `text` broken at spaces into lines of at most [`WIDTH`] characters.
+fn wrap(text: &str) -> String {
+    let mut out = String::new();
+    let mut width = 0;
+    for word in text.split(' ') {
+        let len = word.chars().count();
+        if width > 0 && width + 1 + len > WIDTH {
+            out.push('\n');
+            width = 0;
+        } else if width > 0 {
+            out.push(' ');
+            width += 1;
+        }
+        out.push_str(word);
+        width += len;
+    }
+    out
+}
+
+/// What a run added.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Added {
+    pub articles: usize,
+    pub passages: BTreeMap<&'static str, usize>,
+}
+
+/// Appends to `out` the passages of every article under `dirs` its
+/// readme does not list yet, then lists them there under a revision
+/// dated `today`.
+pub fn update(dirs: &[PathBuf], out: &Path, today: &str) -> Result<Added> {
+    let readme_path = out.join(README);
+    let readme = match fs::read_to_string(&readme_path) {
+        Ok(text) => Readme::parse(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Readme::default(),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("reading {}", readme_path.display()))
+        }
+    };
+    let mut files = Vec::new();
+    for dir in dirs {
+        markdown(dir, &mut files)
+            .with_context(|| format!("reading {}", dir.display()))?;
+    }
+    files.sort();
+    let detector = Detector::default();
+    let mut seen: HashSet<String> = readme.keys().collect();
+    let mut texts: BTreeMap<&str, String> = BTreeMap::new();
+    let mut listed = Vec::new();
+    let mut added = Added::default();
+    for file in files {
+        let text = fs::read_to_string(&file)
+            .with_context(|| format!("reading {}", file.display()))?
+            .replace("\r\n", "\n");
+        let Some((article, body)) = article(&text) else { continue };
+        if seen.contains(&article.key) {
+            continue;
+        }
+        let passages = passages(body, &detector);
+        if passages.is_empty() {
+            continue;
+        }
+        let mut languages: Vec<&str> = Vec::new();
+        for (language, passage) in passages {
+            let text = texts.entry(language).or_default();
+            if !languages.contains(&language) {
+                text.push_str(&format!("{}\n", article.cite()));
+                languages.push(language);
+            }
+            text.push_str(&format!("{}\n\n", wrap(&passage)));
+            *added.passages.entry(language).or_default() += 1;
+        }
+        listed.push(Readme::line(&article, &languages));
+        seen.insert(article.key);
+        added.articles += 1;
+    }
+    if added.articles == 0 {
+        return Ok(added);
+    }
+    fs::create_dir_all(out)
+        .with_context(|| format!("creating {}", out.display()))?;
+    for (language, text) in texts {
+        let path = out.join(format!("{language}.txt"));
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(text.as_bytes()))
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
+    let readme = readme.with(revision(today, dirs, &added), listed);
+    fs::write(&readme_path, readme.render())
+        .with_context(|| format!("writing {}", readme_path.display()))?;
+    Ok(added)
+}
+
+fn revision(today: &str, dirs: &[PathBuf], added: &Added) -> String {
+    let counts: Vec<String> =
+        added.passages.iter().map(|(l, n)| format!("{l} {n}")).collect();
+    let dirs: Vec<String> =
+        dirs.iter().map(|d| d.display().to_string()).collect();
+    format!(
+        "{today}\t+{} articles\t+{}\t{}",
+        added.articles,
+        counts.join(", "),
+        dirs.join(" ")
+    )
+}
+
+/// The `.md` files under `dir`, hidden directories left out.
+fn markdown(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let hidden = path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'));
+        if path.is_dir() && !hidden {
+            markdown(&path, out)?;
+        } else if path.extension().is_some_and(|x| x == "md") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+const ABOUT: &str = "\
+Passages of prose for `oui -m feed`, drawn by `oui feed DIR...` from a
+feed reader's archive of markdown articles, each with `---` front matter
+giving its title, url or guid, published date and feed.
+
+Only plain paragraphs are taken: headings, lists, quotes, tables, code,
+images, HTML and URLs are left out, links keep their text. Paragraphs are
+cut at sentence ends into passages of 30 to 110 words, each sorted into
+the bundled language whose 100 commonest words make up a quarter of it or
+more, and kept only if every character has a key on a bundled layout. At
+most three are taken from an article, spread through it, under a
+[[feed, Title (year)]] citation in <language>.txt.
+
+Running `oui feed` again appends only articles not listed below, so the
+passages already here stay as they are. To rebuild from scratch, delete
+this directory. The articles remain their authors' copyright: this
+directory is for your own practice, not for sharing.";
+
+/// The readme of a feed directory: what it is, the runs that built it,
+/// and the articles they used, one tab-separated line each.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Readme {
+    revisions: Vec<String>,
+    articles: Vec<String>,
+}
+
+const REVISIONS: &str = "Revisions";
+const ARTICLES: &str = "Articles";
+
+impl Readme {
+    pub fn parse(text: &str) -> Self {
+        let mut readme = Readme::default();
+        let mut section = None;
+        for line in text.lines() {
+            match line {
+                REVISIONS | ARTICLES => section = Some(line),
+                _ if line.trim().is_empty() || line.starts_with("--") => {}
+                _ if section == Some(REVISIONS) => {
+                    readme.revisions.push(line.to_string())
+                }
+                _ if section == Some(ARTICLES) => {
+                    readme.articles.push(line.to_string())
+                }
+                _ => {}
+            }
+        }
+        readme
+    }
+
+    /// The keys of the articles listed: each line's fourth field.
+    pub fn keys(&self) -> impl Iterator<Item = String> + '_ {
+        self.articles.iter().filter_map(|l| Some(l.split('\t').nth(3)?.into()))
+    }
+
+    fn line(article: &Article, languages: &[&str]) -> String {
+        let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        format!(
+            "{}\t{}\t{}\t{}\t{}",
+            article.date,
+            languages.join(","),
+            flat(&article.feed),
+            article.key,
+            flat(&article.title)
+        )
+    }
+
+    fn with(mut self, revision: String, articles: Vec<String>) -> Self {
+        self.revisions.push(revision);
+        self.articles.extend(articles);
+        self
+    }
+
+    pub fn render(&self) -> String {
+        let section = |name: &str, lines: &[String]| {
+            let rule = "-".repeat(name.len());
+            format!("{name}\n{rule}\n{}\n", lines.join("\n"))
+        };
+        format!(
+            "oui feed\n========\n\n{ABOUT}\n\n{}\n{}",
+            section(REVISIONS, &self.revisions),
+            section(ARTICLES, &self.articles)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +738,93 @@ An \\*escaped\\* [ref][1] link.";
         assert!(picked.iter().all(|(l, _)| *l == "english"));
         let keyless = paragraph(0).replace("man", "人");
         assert!(passages(&keyless, &Detector::default()).is_empty());
+    }
+
+    #[test]
+    fn wrapping_keeps_lines_within_the_width() {
+        let text = "word ".repeat(40);
+        let wrapped = wrap(text.trim());
+        assert!(wrapped.lines().all(|l| l.chars().count() <= WIDTH));
+        assert_eq!(wrapped.split_whitespace().count(), 40);
+        assert_eq!(wrap("a b"), "a b");
+    }
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("oui-feed-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn post(dir: &Path, name: &str, guid: &str, body: &str) {
+        let text = format!(
+            "---\ntitle: {name}\npublished: \"2026-01-0{}T00:00:00Z\"\n\
+             feed: blog\nguid: {guid}\n---\n\n{body}\n",
+            name.len() % 9
+        );
+        fs::write(dir.join(format!("{name}.md")), text).unwrap();
+    }
+
+    #[test]
+    fn updates_append_only_unlisted_articles() {
+        let tmp = TempDir::new("update");
+        let src = tmp.0.join("feeds/blog");
+        fs::create_dir_all(src.join(".hidden")).unwrap();
+        let out = tmp.0.join("out");
+        let en = "It is a truth that the man was in want of a wife, and that \
+                  he would have to go out to find one in the town, for there \
+                  was no one in the house who could be that wife to him.";
+        let ru = "Все смешалось в доме, и он не мог жить с ним в одном доме, \
+                  потому что она не знала, что он был там, где его не было, \
+                  и это было так, как будто она была не с ним, а с другим.";
+        post(&src, "first", "g1", en);
+        post(&src, "both", "g2", &format!("{en}\n\n{ru}"));
+        post(&src, "code", "g3", "```\nfn main() {}\n```");
+        post(&src.join(".hidden"), "hidden", "g4", en);
+        let dirs = [tmp.0.join("feeds")];
+
+        let added = update(&dirs, &out, "2026-10-28").unwrap();
+        assert_eq!(added.articles, 2);
+        assert_eq!(
+            added.passages,
+            BTreeMap::from([("english", 2), ("russian", 1)])
+        );
+        let english = fs::read_to_string(out.join("english.txt")).unwrap();
+        let cited = words::passages(&english);
+        assert_eq!(cited.len(), 2);
+        assert_eq!(cited[0].cite.as_deref(), Some("blog, both (2026)"));
+        let readme =
+            Readme::parse(&fs::read_to_string(out.join(README)).unwrap());
+        assert_eq!(readme.keys().collect::<Vec<_>>(), ["g2", "g1"]);
+        assert_eq!(readme.revisions.len(), 1);
+        assert!(readme.revisions[0]
+            .starts_with("2026-10-28\t+2 articles\t+english 2, russian 1\t"));
+        let both = "2026-01-04\tenglish,russian\tblog\tg2\tboth";
+        assert_eq!(readme.articles[0], both);
+
+        let again = update(&dirs, &out, "2026-10-29").unwrap();
+        assert_eq!(again, Added::default(), "nothing new, nothing written");
+        post(&src, "later", "g5", en);
+        let later = update(&dirs, &out, "2026-10-30").unwrap();
+        assert_eq!(later.articles, 1);
+        let english = fs::read_to_string(out.join("english.txt")).unwrap();
+        assert_eq!(words::passages(&english).len(), 3);
+        let text = fs::read_to_string(out.join(README)).unwrap();
+        let readme = Readme::parse(&text);
+        assert_eq!(readme.keys().collect::<Vec<_>>(), ["g2", "g1", "g5"]);
+        assert_eq!(readme.revisions.len(), 2);
+        assert_eq!(Readme::parse(&readme.render()), readme);
+        assert!(text.starts_with("oui feed\n========\n\nPassages of prose"));
     }
 }

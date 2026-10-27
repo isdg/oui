@@ -168,6 +168,25 @@ Emma Woodhouse, handsome, clever, and rich, ...
 Another passage from Emma.
 ```
 
+## Feed
+
+`oui feed DIR...` turns a feed reader's archive of markdown articles --
+each with `---` front matter giving its `title`, `url` or `guid`,
+`published` and `feed` -- into passages under `~/.oui/feed/`:
+
+```sh
+oui feed ~/feed/feeds         # ~/.oui/feed/english.txt, russian.txt, ...
+```
+
+Only plain paragraphs are kept, cut at sentence ends into passages of 30
+to 110 words, sorted by language and cited by feed, title and year; at
+most three come from one article. `~/.oui/feed/readme.txt` explains the
+directory, logs each run (date, articles, passages per language, source)
+and lists every article used, one tab-separated line each: date,
+languages, feed, guid or url, title. Running it again appends only the
+articles not listed yet. The articles stay their authors' copyright, so
+the feed is built locally and never bundled.
+
 ## Bundled words and texts
 
 Word lists hold the most frequent forms in the bundled books, found in at
@@ -193,6 +212,7 @@ author, work and year; old French spellings are left out.
 - `src/fingering.rs` — the fingers your timing implies.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
+- `src/feed.rs` — `oui feed`: passages from a markdown feed archive.
 - `src/practice.rs` — the costliest bigrams and the words for `-p`.
 - `src/chain.rs` — the word chains behind `--mode funny`.
 - `src/extras.rs` — `--with` punctuation, numbers, capitals, symbols.

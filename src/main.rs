@@ -17,6 +17,7 @@ use ratatui::{DefaultTerminal, Frame};
 use oui::chain::Chain;
 use oui::config::Config;
 use oui::extras::{Decorator, Extra};
+use oui::feed;
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::practice::{self, Target};
@@ -101,6 +102,13 @@ enum Cmd {
         /// draws.
         #[arg(short, long)]
         practice: bool,
+    },
+    /// Draw passages of prose from a feed reader's markdown archive into
+    /// ~/.oui/feed/, adding only articles its readme.txt does not list.
+    Feed {
+        /// Directories searched for `.md` articles with front matter.
+        #[arg(required = true)]
+        dirs: Vec<PathBuf>,
     },
 }
 
@@ -448,6 +456,25 @@ fn main() -> Result<()> {
             stats(&store, last, source.as_deref(), layout, view)?;
             if practice {
                 practice_summary(&store, last, source.as_deref())?;
+            }
+            Ok(())
+        }
+        Some(Cmd::Feed { dirs }) => {
+            let out = store.dir().join("feed");
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let added = feed::update(&dirs, &out, &today)?;
+            let counts: Vec<String> = added
+                .passages
+                .iter()
+                .map(|(language, n)| format!("{n} {language}"))
+                .collect();
+            match added.articles {
+                0 => println!("no new articles for {}", out.display()),
+                n => println!(
+                    "{n} articles, {} passages into {}",
+                    counts.join(", "),
+                    out.display()
+                ),
             }
             Ok(())
         }
@@ -980,6 +1007,10 @@ mod tests {
         let p = parse(&["stats", "-p", "-s", "english"]).unwrap().cmd;
         assert!(matches!(p, Some(Cmd::Stats { practice: true, .. })));
         assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
+        let feed = parse(&["feed", "a", "b"]).unwrap().cmd;
+        let dirs = vec![PathBuf::from("a"), PathBuf::from("b")];
+        assert_eq!(feed, Some(Cmd::Feed { dirs }));
+        assert!(parse(&["feed"]).is_err(), "a directory is required");
     }
 
     #[test]

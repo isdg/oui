@@ -1,1 +1,4 @@
 /target
+# Feed texts `oui feed` generates stay local: the articles are
+# their authors' copyright.
+/resources/feed/

@@ -3,7 +3,7 @@
 use std::fs;
 use std::io::IsTerminal;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -44,14 +44,15 @@ const PRACTICE: usize = 150;
 const FOCUS: usize = 3;
 
 const FILES_HELP: &str = "\
-Files (under $OUI_HOME, default ~/.oui):
-  config                 defaults for any flag above, one `key = value` a
+Files:
+  ~/.ouirc               defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
                            mode     = words        # text, classics, ext, funny
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
+Under $OUI_HOME, default ~/.oui:
   history.jsonl          every test, keystrokes included; read by `oui stats`
                          and --practice
   texts/<language>/*.txt your own passages for --mode text, blank-line
@@ -117,7 +118,7 @@ enum Cmd {
     },
 }
 
-/// What a test is; each flag can be defaulted in ~/.oui/config.
+/// What a test is; each flag can be defaulted in ~/.ouirc.
 #[derive(Args, Debug, Clone, Default)]
 struct TestArgs {
     /// Text file to type in order, instead of random words.
@@ -484,12 +485,26 @@ fn main() -> Result<()> {
             Ok(())
         }
         None => {
-            let config = Config::load(&store.dir().join("config"))?;
+            let config = config(&oui::config::path()?, &store)?;
             let args = merge(&cli.test, &config);
             let app = App::new(setup(&args, &store)?, Some(store));
             ratatui::run(|terminal| run(terminal, app))
         }
     }
+}
+
+/// The config at `rc`; one left where oui used to read it is an error
+/// rather than silently ignored.
+fn config(rc: &Path, store: &Store) -> Result<Config> {
+    let old = store.dir().join("config");
+    if !rc.exists() && old.exists() {
+        bail!(
+            "oui reads its config from {} now: move {} there",
+            rc.display(),
+            old.display()
+        );
+    }
+    Config::load(rc)
 }
 
 fn stats(
@@ -1029,7 +1044,7 @@ mod tests {
         use clap::CommandFactory;
         let help = Cli::command().render_long_help().to_string();
         for needle in [
-            "config",
+            "~/.ouirc",
             "history.jsonl",
             "texts/<language>/",
             "external/",
@@ -1037,6 +1052,23 @@ mod tests {
         ] {
             assert!(help.contains(needle), "help lacks {needle:?}\n{help}");
         }
+    }
+
+    #[test]
+    fn config_is_read_from_the_rc_and_not_the_old_place() {
+        let tmp = TempDir::new("config");
+        let store = Store::at(tmp.0.join("home"));
+        let rc = tmp.0.join(".ouirc");
+        assert_eq!(config(&rc, &store).unwrap(), Config::default());
+        fs::create_dir_all(store.dir()).unwrap();
+        fs::write(&rc, "words = 7").unwrap();
+        let words = |c: Config| c.words.map(NonZeroUsize::get);
+        assert_eq!(words(config(&rc, &store).unwrap()), Some(7));
+        fs::write(store.dir().join("config"), "words = 9").unwrap();
+        assert_eq!(words(config(&rc, &store).unwrap()), Some(7));
+        fs::remove_file(&rc).unwrap();
+        let err = config(&rc, &store).unwrap_err().to_string();
+        assert!(err.starts_with("oui reads its config from "), "{err}");
     }
 
     #[test]

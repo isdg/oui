@@ -142,11 +142,11 @@ quickly, or pairs on different fingers typed as slowly as one finger,
 move a key (`?` where no finger clearly takes it, `≈` where neighbouring
 fingers move as one), each mark listed with the pairs behind it.
 
-`$OUI_HOME` moves `~/.oui` elsewhere.
+`$OUI_HOME` moves `~/.oui` elsewhere; the config stays in `~/.ouirc`.
 
 ## Config
 
-`~/.oui/config` defaults any test flag, one `key = value` a line, in the
+`~/.ouirc` defaults any test flag, one `key = value` a line, in the
 same format as `plcrc`; flags override it. Unknown keys are errors.
 
 ```
@@ -213,7 +213,7 @@ author, work and year; old French spellings are left out.
 - `src/summary.rs` — `oui stats`.
 - `src/geometry.rs` — finger, hand and row per key; tallies over them.
 - `src/fingering.rs` — the fingers your timing implies.
-- `src/config.rs` — `~/.oui/config`.
+- `src/config.rs` — `~/.ouirc`.
 - `src/words.rs` — word lists, passages, texts, drills.
 - `src/external.rs` — `oui external`: passages from a markdown archive.
 - `src/practice.rs` — the costliest bigrams and the words for `-p`.

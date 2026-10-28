@@ -1,9 +1,10 @@
-//! Defaults from `config` under `~/.oui` (or `$OUI_HOME`): `key = value`
-//! lines as in `plcrc`. Every key mirrors a flag, and flags win.
+//! Defaults from `~/.ouirc`: `key = value` lines as in `plcrc`. Every key
+//! mirrors a flag, and flags win.
 
+use std::env;
 use std::fs;
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
@@ -21,6 +22,12 @@ pub struct Config {
     pub time: Option<NonZeroU64>,
     /// `None` also for `layout = auto`, which detects it from the words.
     pub layout: Option<Layout>,
+}
+
+/// `~/.ouirc`.
+pub fn path() -> Result<PathBuf> {
+    let home = env::var_os("HOME").context("HOME not set")?;
+    Ok(Path::new(&home).join(".ouirc"))
 }
 
 impl Config {

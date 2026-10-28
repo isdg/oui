@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::builder::ArgPredicate;
 use clap::{Args, Parser, Subcommand};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
@@ -48,7 +49,8 @@ Files:
   ~/.ouirc               defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # text, classics, ext, funny
+                           mode     = words        # text, classics, ext, funny,
+                                                   # practice
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -127,12 +129,17 @@ struct TestArgs {
     /// texts in ~/.oui/texts/<language>/ or external ones for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
-    /// Random words (default), or passages of real prose; each mode also
-    /// takes its first letter.
-    #[arg(short, long, value_enum, conflicts_with = "file")]
+    /// Random words (default), passages of real prose, or practice; each
+    /// mode also takes its first letter.
+    #[arg(
+        short,
+        long,
+        value_enum,
+        conflicts_with = "file",
+        default_value_if("practice", ArgPredicate::IsPresent, "practice")
+    )]
     mode: Option<Mode>,
-    /// Random words richest in the bigrams that cost your tests of the
-    /// language the most time, misses included.
+    /// Short for --mode practice.
     #[arg(short, long, conflicts_with_all = ["file", "mode"])]
     practice: bool,
     /// Extras mixed into random words, comma-separated: punctuation,
@@ -556,8 +563,7 @@ fn select(
 }
 
 /// The flags given, with the config filling in the rest. A FILE takes no
-/// language, mode or extras from the config, nor does text mode extras,
-/// nor practice a mode.
+/// language, mode or extras from the config, nor does text mode extras.
 fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     fn pick<T>(
         flag: Option<T>,
@@ -567,7 +573,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         flag.or(set.filter(|_| from_config))
     }
     let from_config = cli.file.is_none();
-    let mode = pick(cli.mode, config.mode, from_config && !cli.practice);
+    let mode = pick(cli.mode, config.mode, from_config);
     let with = match cli.with.is_empty() {
         false => cli.with.clone(),
         true if from_config && !mode.is_some_and(Mode::passages) => {
@@ -609,8 +615,7 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     let with: Vec<String> =
         extras.iter().map(|e| e.name().to_string()).collect();
     let mode = match source {
-        _ if cli.practice => "practice",
-        Source::Random(_) => "words",
+        Source::Random(_) => cli.mode.unwrap_or(Mode::Words).name(),
         Source::Text(_) => "file",
         Source::Passages { .. } => cli.mode.unwrap_or(Mode::Text).name(),
         Source::Funny(_) => "funny",
@@ -680,7 +685,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
     }
     let language =
         cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
-    if cli.practice {
+    if cli.mode == Some(Mode::Practice) {
         let records = select(store.load()?.records, None, Some(&language));
         let (targets, words) = practice_pool(&language, &records, store)?;
         let focus = targets.iter().take(FOCUS).map(|t| t.bigram).collect();
@@ -1149,7 +1154,7 @@ mod tests {
         let store = slow_qu(&tmp);
         let config = oui::config::parse("mode = text\nwith = p").unwrap();
         let args = merge(&cli(&["--practice", "-w", "9"]), &config);
-        assert_eq!(args.mode, None, "the config's mode is ignored");
+        assert_eq!(args.mode, Some(Mode::Practice), "not the config's");
         let practice = setup(&args, &store).unwrap();
         assert_eq!(
             practice.title,
@@ -1181,10 +1186,16 @@ mod tests {
             |args: &[&str]| Cli::try_parse_from([&["oui"][..], args].concat());
         assert!(parse(&["-p", "notes.txt"]).is_err());
         assert!(parse(&["-p", "-m", "text"]).is_err());
+        assert!(parse(&["-m", "p", "notes.txt"]).is_err());
         assert!(parse(&["-p", "-l", "russian", "-t", "30"]).is_ok());
         let err = |args: &[&str]| {
             setup(&cli(args), &no_home()).err().unwrap().to_string()
         };
+        assert_eq!(err(&["-p"]), err(&["--mode", "practice"]));
+        let config = oui::config::parse("mode = p").unwrap();
+        let merged = merge(&cli(&[]), &config);
+        let from_config = setup(&merged, &no_home()).err().unwrap();
+        assert_eq!(err(&["-p"]), from_config.to_string());
         assert_eq!(
             err(&["-p"]),
             "no english tests to practise on in /nonexistent/oui/history.jsonl"

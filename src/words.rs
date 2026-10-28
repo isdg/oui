@@ -28,6 +28,10 @@ pub enum Mode {
     /// mean something.
     #[value(aliases = ["funnywords", "f"])]
     Funny,
+    /// Random words richest in the bigrams that cost your tests of the
+    /// language the most time, misses included.
+    #[value(alias = "p")]
+    Practice,
 }
 
 impl Mode {
@@ -38,6 +42,7 @@ impl Mode {
             Mode::Classics => "classics",
             Mode::External => "ext",
             Mode::Funny => "funny",
+            Mode::Practice => "practice",
         }
     }
 

@@ -34,8 +34,8 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and external ones; `classics`: the bundled classics only; `ext` (or `external`): the external texts only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. Each also takes its first letter: `-m t`. |
-| `-p, --practice` | Random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and external ones; `classics`: the bundled classics only; `ext` (or `external`): the external texts only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something; `practice`: see `-p`. Each also takes its first letter: `-m t`. |
+| `-p, --practice` | Short for `-m practice`: random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
 | `-t, --time` | Make it a timed test of this many seconds. |

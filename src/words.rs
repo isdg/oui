@@ -14,12 +14,13 @@ use crate::chain::Chain;
 pub enum Mode {
     /// Random words from the language's list.
     Words,
-    /// Passages of real prose: the classics, your texts and your feed.
+    /// Passages of real prose: the classics, your texts and external ones.
     Text,
     /// Passages of the bundled public-domain classics only.
     Classics,
-    /// Passages `oui feed` drew from your feed reader into ~/.oui/feed/.
-    Feed,
+    /// Passages `oui external` extracted into ~/.oui/external/.
+    #[value(name = "ext", alias = "external")]
+    External,
     /// Words that follow each other as in that prose: phrases that almost
     /// mean something.
     #[value(alias = "funnywords")]
@@ -32,14 +33,14 @@ impl Mode {
             Mode::Words => "words",
             Mode::Text => "text",
             Mode::Classics => "classics",
-            Mode::Feed => "feed",
+            Mode::External => "ext",
             Mode::Funny => "funny",
         }
     }
 
     /// Whether the mode types whole passages, which take no extras.
     pub fn passages(self) -> bool {
-        matches!(self, Mode::Text | Mode::Classics | Mode::Feed)
+        matches!(self, Mode::Text | Mode::Classics | Mode::External)
     }
 }
 
@@ -148,8 +149,8 @@ pub fn load_passages(language: &str, dir: &Path) -> Result<Vec<Passage>> {
     Ok(out)
 }
 
-/// The passages `oui feed` wrote for `language` into `dir`, if any.
-pub fn feed(language: &str, dir: &Path) -> Result<Vec<Passage>> {
+/// The passages `oui external` wrote for `language` into `dir`, if any.
+pub fn external(language: &str, dir: &Path) -> Result<Vec<Passage>> {
     let path = dir.join(format!("{language}.txt"));
     match fs::read_to_string(&path) {
         Ok(text) => Ok(passages(&text)),

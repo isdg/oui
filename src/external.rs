@@ -1,6 +1,7 @@
-//! `oui feed`: passages of prose drawn from a feed reader's archive of
-//! markdown articles, appended to a directory beside a readme that lists
-//! the articles used, so later runs add only new ones.
+//! `oui external`: passages of prose extracted from an archive of
+//! markdown articles, such as a feed reader's, appended to a directory
+//! beside a readme that lists the articles used, so later runs add only
+//! new ones.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -501,9 +502,10 @@ fn markdown(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 const ABOUT: &str = "\
-Passages of prose for `oui -m feed`, drawn by `oui feed DIR...` from a
-feed reader's archive of markdown articles, each with `---` front matter
-giving its title, url or guid, published date and feed.
+Passages of prose for `oui -m ext`, extracted by `oui external DIR...`
+from an archive of markdown articles, such as a feed reader's, each with
+`---` front matter giving its title, url or guid, published date and
+feed.
 
 Only plain paragraphs are taken: headings, lists, quotes, tables, code,
 images, HTML and URLs are left out, links keep their text. Paragraphs are
@@ -513,7 +515,7 @@ more, and kept only if every character has a key on a bundled layout. At
 most three are taken from an article, spread through it, under a
 [[feed, Title (year)]] citation in <language>.txt.
 
-Running `oui feed` again appends only articles not listed below, so the
+Running `oui external` again appends only articles not listed below, so the
 passages already here stay as they are. To rebuild from scratch, delete
 this directory. The articles remain their authors' copyright: this
 directory is for your own practice, not for sharing.";
@@ -578,7 +580,7 @@ impl Readme {
             format!("{name}\n{rule}\n{}\n", lines.join("\n"))
         };
         format!(
-            "oui feed\n========\n\n{ABOUT}\n\n{}\n{}",
+            "oui external\n============\n\n{ABOUT}\n\n{}\n{}",
             section(REVISIONS, &self.revisions),
             section(ARTICLES, &self.articles)
         )
@@ -825,6 +827,6 @@ An \\*escaped\\* [ref][1] link.";
         assert_eq!(readme.keys().collect::<Vec<_>>(), ["g2", "g1", "g5"]);
         assert_eq!(readme.revisions.len(), 2);
         assert_eq!(Readme::parse(&readme.render()), readme);
-        assert!(text.starts_with("oui feed\n========\n\nPassages of prose"));
+        assert!(text.starts_with("oui external\n============\n\nPassages"));
     }
 }

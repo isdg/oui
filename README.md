@@ -22,7 +22,7 @@ oui -l russian            # Russian words, ЙЦУКЕН heatmap
 oui -W p,n                # with punctuation and numbers mixed in
 oui -m text -l french     # a passage of real French prose
 oui -m classics           # a passage of the bundled classics only
-oui -m feed               # a passage of your feed (see Feed)
+oui -m ext                # a passage of external texts (see below)
 oui -m funny              # words that follow each other as in prose
 oui -p                    # words that drill your costliest bigrams
 oui -t 60                 # a timed test of 60 seconds
@@ -34,7 +34,7 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and your feed; `classics`: the bundled classics only; `feed`: your feed only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and external ones; `classics`: the bundled classics only; `ext` (or `external`): the external texts only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something. |
 | `-p, --practice` | Random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
@@ -151,7 +151,7 @@ same format as `plcrc`; flags override it. Unknown keys are errors.
 
 ```
 language = russian
-mode     = words          # or text, classics, feed, funny
+mode     = words          # or text, classics, ext, funny
 with     = punctuation, numbers
 words    = 50             # or time = 60
 layout   = auto           # or qwerty, jcuken
@@ -169,25 +169,26 @@ Emma Woodhouse, handsome, clever, and rich, ...
 Another passage from Emma.
 ```
 
-## Feed
+## External texts
 
-`oui feed DIR...` turns a feed reader's archive of markdown articles --
-each with `---` front matter giving its `title`, `url` or `guid`,
-`published` and `feed` -- into passages under `~/.oui/feed/`:
+`oui external DIR...` (or `oui ext`) extracts passages from an archive of
+markdown articles, such as a feed reader's -- each with `---` front
+matter giving its `title`, `url` or `guid`, `published` and `feed` --
+into `~/.oui/external/`:
 
 ```sh
-oui feed ~/feed/feeds         # ~/.oui/feed/english.txt, russian.txt, ...
+oui external ~/feed/feeds     # ~/.oui/external/english.txt, russian.txt
 ```
 
 Only plain paragraphs are kept, cut at sentence ends into passages of 30
 to 110 words, sorted by language and cited by feed, title and year; at
-most three come from one article. `~/.oui/feed/readme.txt` explains the
-directory, logs each run (date, articles, passages per language, source)
-and lists every article used, one tab-separated line each: date,
+most three come from one article. `~/.oui/external/readme.txt` explains
+the directory, logs each run (date, articles, passages per language,
+source) and lists every article used, one tab-separated line each: date,
 languages, feed, guid or url, title. Running it again appends only the
-articles not listed yet. `-m feed` types these passages alone, `-m text`
+articles not listed yet. `-m ext` types these passages alone, `-m text`
 among the classics and your texts. The articles stay their authors'
-copyright, so the feed is built locally and never bundled.
+copyright, so external texts are extracted locally and never bundled.
 
 ## Bundled words and texts
 
@@ -214,7 +215,7 @@ author, work and year; old French spellings are left out.
 - `src/fingering.rs` — the fingers your timing implies.
 - `src/config.rs` — `~/.oui/config`.
 - `src/words.rs` — word lists, passages, texts, drills.
-- `src/feed.rs` — `oui feed`: passages from a markdown feed archive.
+- `src/external.rs` — `oui external`: passages from a markdown archive.
 - `src/practice.rs` — the costliest bigrams and the words for `-p`.
 - `src/chain.rs` — the word chains behind `--mode funny`.
 - `src/extras.rs` — `--with` punctuation, numbers, capitals, symbols.

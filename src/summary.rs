@@ -521,7 +521,8 @@ fn mode_colour(mode: &str) -> u8 {
         "words" => 66,
         "text" => 101,
         "classics" => 95,
-        "feed" => 109,
+        // `feed` is what `ext` was recorded as before its rename.
+        "ext" | "feed" => 109,
         "funny" => 138,
         "practice" => 103,
         "file" => 65,

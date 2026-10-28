@@ -2,8 +2,8 @@
 
 pub mod chain;
 pub mod config;
+pub mod external;
 pub mod extras;
-pub mod feed;
 pub mod fingering;
 pub mod geometry;
 pub mod history;

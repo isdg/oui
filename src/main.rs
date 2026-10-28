@@ -16,8 +16,8 @@ use ratatui::{DefaultTerminal, Frame};
 
 use oui::chain::Chain;
 use oui::config::Config;
+use oui::external;
 use oui::extras::{Decorator, Extra};
-use oui::feed;
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::practice::{self, Target};
@@ -48,7 +48,7 @@ Files (under $OUI_HOME, default ~/.oui):
   config                 defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # text, classics, feed, funny
+                           mode     = words        # text, classics, ext, funny
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -57,9 +57,10 @@ Files (under $OUI_HOME, default ~/.oui):
   texts/<language>/*.txt your own passages for --mode text, blank-line
                          separated; a [[Author, Work]] line cites those
                          after it
-  feed/<language>.txt    passages `oui feed` draws from a feed archive, for
-                         --mode feed and text; feed/readme.txt lists the
-                         articles used";
+  external/<language>.txt
+                         passages `oui external` extracts from an archive,
+                         for --mode ext and text; external/readme.txt
+                         lists the articles used";
 
 /// Typing test that shows which keys and bigrams slow you down.
 #[derive(Parser, Debug)]
@@ -106,9 +107,10 @@ enum Cmd {
         #[arg(short, long)]
         practice: bool,
     },
-    /// Draw passages of prose from a feed reader's markdown archive into
-    /// ~/.oui/feed/, adding only articles its readme.txt does not list.
-    Feed {
+    /// Extract passages of prose from an archive of markdown articles into
+    /// ~/.oui/external/, adding only articles its readme.txt does not list.
+    #[command(alias = "ext")]
+    External {
         /// Directories searched for `.md` articles with front matter.
         #[arg(required = true)]
         dirs: Vec<PathBuf>,
@@ -121,7 +123,7 @@ struct TestArgs {
     /// Text file to type in order, instead of random words.
     file: Option<PathBuf>,
     /// Language to type: english (default), french or russian, or any with
-    /// texts in ~/.oui/texts/<language>/ or a feed for --mode text.
+    /// texts in ~/.oui/texts/<language>/ or external ones for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
     /// Random words (default), or passages of real prose.
@@ -462,10 +464,10 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Cmd::Feed { dirs }) => {
-            let out = store.dir().join("feed");
+        Some(Cmd::External { dirs }) => {
+            let out = store.dir().join("external");
             let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let added = feed::update(&dirs, &out, &today)?;
+            let added = external::update(&dirs, &out, &today)?;
             let counts: Vec<String> = added
                 .passages
                 .iter()
@@ -675,13 +677,14 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         }
         return Ok((Source::passages(passages), language, Vec::new()));
     }
-    let feed = store.dir().join("feed");
-    if cli.mode == Some(Mode::Feed) {
-        let passages = words::feed(&language, &feed)?;
+    let external = store.dir().join("external");
+    if cli.mode == Some(Mode::External) {
+        let passages = words::external(&language, &external)?;
         if passages.is_empty() {
             bail!(
-                "no feed for '{language}' in {} (build it with `oui feed DIR`)",
-                feed.display()
+                "no external texts for '{language}' in {} (extract them \
+                 with `oui external DIR`)",
+                external.display()
             );
         }
         return Ok((Source::passages(passages), language, Vec::new()));
@@ -689,7 +692,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
     if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
         let texts = store.dir().join("texts");
         let mut passages = words::load_passages(&language, &texts)?;
-        passages.extend(words::feed(&language, &feed)?);
+        passages.extend(words::external(&language, &external)?);
         if passages.is_empty() {
             let dir = texts.join(&language);
             bail!(
@@ -936,36 +939,39 @@ mod tests {
     }
 
     #[test]
-    fn feed_mode_types_what_oui_feed_wrote() {
-        let tmp = TempDir::new("feed");
+    fn ext_mode_types_what_oui_external_wrote() {
+        let tmp = TempDir::new("external");
         let store = Store::at(&tmp.0);
         let err = |args: &[&str]| {
             setup(&cli(args), &store).err().unwrap().to_string()
         };
-        assert!(err(&["-m", "feed"]).starts_with("no feed for 'english'"));
-        fs::create_dir_all(tmp.0.join("feed")).unwrap();
-        let feed = "[[blog, Post (2026)]]\none two three\n\nfour five\n";
-        fs::write(tmp.0.join("feed/english.txt"), feed).unwrap();
+        assert!(
+            err(&["-m", "ext"]).starts_with("no external texts for 'english'")
+        );
+        fs::create_dir_all(tmp.0.join("external")).unwrap();
+        let ext = "[[blog, Post (2026)]]\none two three\n\nfour five\n";
+        fs::write(tmp.0.join("external/english.txt"), ext).unwrap();
         let mine = tmp.0.join("texts/english");
         fs::create_dir_all(&mine).unwrap();
         fs::write(mine.join("a.txt"), "[[Moi]]\nsix seven").unwrap();
 
-        let fed = setup(&cli(&["-m", "feed"]), &store).unwrap();
-        assert_eq!(fed.title, "english feed · one passage");
-        assert_eq!(fed.meta.mode, "feed");
-        let Source::Passages { cites, .. } = &fed.source else {
+        let ext = setup(&cli(&["-m", "external"]), &store).unwrap();
+        assert_eq!(ext.title, "english ext · one passage");
+        assert_eq!(ext.meta.mode, "ext");
+        let Source::Passages { cites, .. } = &ext.source else {
             unreachable!()
         };
         let post = Some("blog, Post (2026)".to_string());
         assert_eq!(cites, &vec![post; 2]);
-        assert!(err(&["-m", "feed", "-W", "p"]).starts_with("--with"));
+        assert!(err(&["-m", "ext", "-W", "p"]).starts_with("--with"));
+        assert!(Cli::try_parse_from(["oui", "-m", "feed"]).is_err());
 
         let all = setup(&cli(&["-m", "text"]), &store).unwrap();
         let Source::Passages { cites, .. } = &all.source else {
             unreachable!()
         };
         let classics = words::classics("english").len();
-        assert_eq!(cites.len(), classics + 3, "classics, texts and feed");
+        assert_eq!(cites.len(), classics + 3, "classics, texts and external");
         assert_eq!(cites[classics].as_deref(), Some("Moi"));
         assert_eq!(cites[classics + 2].as_deref(), Some("blog, Post (2026)"));
     }
@@ -1022,9 +1028,13 @@ mod tests {
     fn help_documents_the_config_and_files() {
         use clap::CommandFactory;
         let help = Cli::command().render_long_help().to_string();
-        for needle in
-            ["config", "history.jsonl", "texts/<language>/", "feed/", "with  "]
-        {
+        for needle in [
+            "config",
+            "history.jsonl",
+            "texts/<language>/",
+            "external/",
+            "with  ",
+        ] {
             assert!(help.contains(needle), "help lacks {needle:?}\n{help}");
         }
     }
@@ -1057,10 +1067,11 @@ mod tests {
         let p = parse(&["stats", "-p", "-s", "english"]).unwrap().cmd;
         assert!(matches!(p, Some(Cmd::Stats { practice: true, .. })));
         assert!(parse(&["-w", "10"]).is_ok_and(|c| c.cmd.is_none()));
-        let feed = parse(&["feed", "a", "b"]).unwrap().cmd;
+        let ext = parse(&["external", "a", "b"]).unwrap().cmd;
         let dirs = vec![PathBuf::from("a"), PathBuf::from("b")];
-        assert_eq!(feed, Some(Cmd::Feed { dirs }));
-        assert!(parse(&["feed"]).is_err(), "a directory is required");
+        assert_eq!(ext, Some(Cmd::External { dirs }));
+        assert_eq!(parse(&["ext", "a", "b"]).unwrap().cmd, ext);
+        assert!(parse(&["external"]).is_err(), "a directory is required");
     }
 
     #[test]

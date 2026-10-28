@@ -127,7 +127,8 @@ struct TestArgs {
     /// texts in ~/.oui/texts/<language>/ or external ones for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
-    /// Random words (default), or passages of real prose.
+    /// Random words (default), or passages of real prose; each mode also
+    /// takes its first letter.
     #[arg(short, long, value_enum, conflicts_with = "file")]
     mode: Option<Mode>,
     /// Random words richest in the bigrams that cost your tests of the

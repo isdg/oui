@@ -13,17 +13,20 @@ use crate::chain::Chain;
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Random words from the language's list.
+    #[value(alias = "w")]
     Words,
     /// Passages of real prose: the classics, your texts and external ones.
+    #[value(alias = "t")]
     Text,
     /// Passages of the bundled public-domain classics only.
+    #[value(alias = "c")]
     Classics,
     /// Passages `oui external` extracted into ~/.oui/external/.
-    #[value(name = "ext", alias = "external")]
+    #[value(name = "ext", aliases = ["external", "e"])]
     External,
     /// Words that follow each other as in that prose: phrases that almost
     /// mean something.
-    #[value(alias = "funnywords")]
+    #[value(aliases = ["funnywords", "f"])]
     Funny,
 }
 
@@ -313,6 +316,14 @@ mod tests {
         for &mode in Mode::value_variants() {
             let value = mode.to_possible_value().unwrap();
             assert_eq!(mode.name(), value.get_name());
+        }
+    }
+
+    #[test]
+    fn modes_answer_to_their_first_letter() {
+        for &mode in Mode::value_variants() {
+            let letter = &mode.name()[..1];
+            assert_eq!(Mode::from_str(letter, true), Ok(mode), "{letter}");
         }
     }
 

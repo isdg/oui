@@ -146,14 +146,12 @@ bare of punctuation, as in words mode, and take `--with` extras the same.
 `--mode ngrams:N` counts the N-letter runs inside the words of the same
 passages, lowercased and split at anything not a letter, so `dit-il`
 holds `dit` and `il` but no `t-i`. Counting running prose rather than the
-word list weighs each n-gram by how often it is typed. Every made-up word
-strings the same number of n-grams, drawn by count: the whole number
-closest to the mean word length over N, at least one, so English types
-four letters a word at N=1 and 2. N=1 types letters as often as the
-language does, N=2 its bigrams, with the seams left to chance. Tests
-record their mode as `ngrams:N`; practice and the `p` drill of a words
-test leave them out, as made-up words set a slower pace and hold pairs
-the language never types.
+word list weighs each n-gram by how often it is typed. Each word of the
+test is one n-gram drawn by count: N=1 types single letters as often as
+the language does, N=2 its bigrams. Tests record their mode as
+`ngrams:N`; practice and the `p` drill of a words test leave them out,
+as n-grams typed apart set a pace of their own and their spaces fall
+where the language's never do.
 
 ### Drill
 
@@ -185,7 +183,7 @@ src/
   words.rs     bundled lists, text sources, sampling, drills
   practice.rs  costliest bigrams and the words richest in them, for -p
   chain.rs     word chains over prose for --mode funny
-  ngrams.rs    made-up words of letter n-grams for --mode ngrams
+  ngrams.rs    letter n-grams of prose as words for --mode ngrams
   session.rs   typing state machine and keystroke log
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline
   plot.rs      plc-style line chart

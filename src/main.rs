@@ -130,8 +130,8 @@ struct TestArgs {
     /// texts in ~/.oui/texts/<language>/ or external ones for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
-    /// Random words (default), passages of real prose, practice, or made-up
-    /// words of n-grams; each mode also takes its first letter.
+    /// Random words (default), passages of real prose, practice, or letter
+    /// n-grams; each mode also takes its first letter.
     #[arg(
         short,
         long,
@@ -429,12 +429,12 @@ impl App {
     }
 }
 
-/// Reports of the last [`RECENT`] recorded tests of the same source, made-up
-/// words only if this test types them.
+/// Reports of the last [`RECENT`] recorded tests of the same source, ngrams
+/// tests only if this is one.
 fn recent(store: &Store, meta: &Meta) -> Result<Vec<Report>> {
     let records = store.load()?.records;
     let same = records.iter().filter(|r| {
-        r.meta.source == meta.source && made_up(&r.meta) == made_up(meta)
+        r.meta.source == meta.source && of_ngrams(&r.meta) == of_ngrams(meta)
     });
     let mut reports: Vec<Report> = same.map(Record::report).collect();
     reports.drain(..reports.len().saturating_sub(RECENT - 1));
@@ -773,14 +773,14 @@ fn practice_pool(
     Ok((targets, words))
 }
 
-/// The `records` practice draws on: all but those of made-up words.
+/// The `records` practice draws on: all but ngrams tests.
 fn practised(records: Vec<Record>) -> Vec<Record> {
-    records.into_iter().filter(|r| !made_up(&r.meta)).collect()
+    records.into_iter().filter(|r| !of_ngrams(&r.meta)).collect()
 }
 
-/// Whether a test typed made-up words, so its pace is no baseline for
-/// typing the language and its bigrams may be ones it never holds.
-fn made_up(meta: &Meta) -> bool {
+/// Whether a test typed n-grams as words, so its pace is no baseline for
+/// typing the language and its spaces fall where the language's never do.
+fn of_ngrams(meta: &Meta) -> bool {
     matches!(Mode::from_str(&meta.mode, false), Ok(Mode::Ngrams(_)))
 }
 
@@ -944,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn ngrams_mode_strings_made_up_words_and_takes_extras() {
+    fn ngrams_mode_types_n_grams_as_words_and_takes_extras() {
         let args = cli(&["-m", "n2", "-l", "russian", "-W", "c"]);
         let setup = setup(&args, &no_home()).unwrap();
         assert_eq!(setup.title, "russian ngrams:2 with capitals · 50 words");
@@ -955,7 +955,7 @@ mod tests {
         assert_eq!(session.words().len(), DEFAULT_WORDS);
         for word in session.words() {
             let letters = word.chars().filter(|c| c.is_alphabetic()).count();
-            assert_eq!(letters % 2, 0, "{word}");
+            assert_eq!(letters, 2, "{word}");
         }
         let mode = |args: &TestArgs| {
             super::setup(args, &no_home()).map(|s| s.meta.mode)
@@ -1234,16 +1234,16 @@ mod tests {
     }
 
     #[test]
-    fn practice_and_drills_leave_made_up_words_apart() {
-        let tmp = TempDir::new("made-up");
+    fn practice_and_drills_leave_ngrams_apart() {
+        let tmp = TempDir::new("ngrams");
         let store = slow_qu(&tmp);
-        let made_up = |record: Record| Record {
+        let as_ngrams = |record: Record| Record {
             meta: Meta { mode: "ngrams:2".into(), ..record.meta },
             ..record
         };
         let records = store.load().unwrap().records;
         fs::remove_file(store.history()).unwrap();
-        store.append(&made_up(records[0].clone())).unwrap();
+        store.append(&as_ngrams(records[0].clone())).unwrap();
         let err = setup(&cli(&["-p"]), &store).err().unwrap().to_string();
         assert!(err.starts_with("no english tests to practise on"), "{err}");
         store.append(&records[0]).unwrap();

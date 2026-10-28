@@ -24,7 +24,7 @@ pub enum Mode {
     External,
     Funny,
     Practice,
-    /// Made-up words of N-letter runs.
+    /// Runs of N letters, one a word.
     Ngrams(NonZeroUsize),
 }
 
@@ -97,23 +97,24 @@ impl ValueEnum for Mode {
             Mode::Ngrams(_) => (
                 "ngrams",
                 &["n"],
-                "Made-up words strung from the letters of that prose, each \
-                 as often as it holds it; ngrams:N (or nN) strings N-letter \
-                 runs instead, so n2 types bigrams",
+                "Single letters of that prose, each as often as it holds \
+                 it; ngrams:N (or n:N, nN) types its runs of N letters \
+                 instead, so n2 types bigrams",
             ),
         };
         Some(PossibleValue::new(name).aliases(aliases).help(help))
     }
 }
 
-/// The N of `ngrams:N` or `nN`.
+/// The N of `ngrams:N`, `n:N` or `nN`.
 fn order(input: &str, ignore_case: bool) -> Option<NonZeroUsize> {
     let input = match ignore_case {
         true => input.to_lowercase(),
         false => input.to_string(),
     };
-    let n = input.strip_prefix("ngrams:").or_else(|| input.strip_prefix('n'));
-    n?.parse().ok()
+    let prefixes = ["ngrams:", "n:", "n"];
+    let n = prefixes.iter().find_map(|p| input.strip_prefix(p))?;
+    n.parse().ok()
 }
 
 /// As history records it and `--mode` takes it back.
@@ -286,7 +287,7 @@ pub enum Source {
     },
     /// Walks over which word follows which in prose.
     Funny(Chain),
-    /// Made-up words strung from the letter n-grams of prose.
+    /// The letter n-grams of prose, one a word.
     Ngrams(Ngrams),
 }
 
@@ -440,6 +441,7 @@ mod tests {
         assert_eq!(Mode::from_str("ngrams", true), n(1));
         assert_eq!(Mode::from_str("ngrams:2", true), n(2));
         assert_eq!(Mode::from_str("N3", true), n(3));
+        assert_eq!(Mode::from_str("n:2", true), n(2));
         assert!(Mode::from_str("N3", false).is_err());
         for bad in ["n0", "ngrams:", "ngrams:x", "ngrams2", "nope"] {
             assert!(Mode::from_str(bad, true).is_err(), "{bad}");

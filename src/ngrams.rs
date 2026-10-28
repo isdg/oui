@@ -15,29 +15,31 @@ pub struct Ngrams {
     /// Every distinct run of letters in the prose.
     words: Vec<String>,
     grams: Weighted<String>,
-    /// Letters per run, which size the made-up words.
-    lengths: Weighted<usize>,
+    /// N-grams in every made-up word: as many as come closest to the mean
+    /// letters per run, at least one.
+    chunks: usize,
 }
 
 impl Ngrams {
     pub fn new(passages: &[Passage], n: NonZeroUsize) -> Self {
         let mut grams = BTreeMap::new();
-        let mut lengths = BTreeMap::new();
+        let (mut letters, mut count) = (0, 0);
         let mut seen = HashSet::new();
         let mut words = Vec::new();
         let all = passages.iter().flat_map(|p| &p.words);
         for run in all.flat_map(|w| runs(w)) {
-            let letters: Vec<char> = run.chars().collect();
-            *lengths.entry(letters.len()).or_default() += 1;
-            for gram in letters.windows(n.get()) {
+            let chars: Vec<char> = run.chars().collect();
+            (letters, count) = (letters + chars.len(), count + 1);
+            for gram in chars.windows(n.get()) {
                 *grams.entry(gram.iter().collect()).or_default() += 1;
             }
             if seen.insert(run.clone()) {
                 words.push(run);
             }
         }
-        let (grams, lengths) = (Weighted::new(grams), Weighted::new(lengths));
-        Ngrams { n, words, grams, lengths }
+        let per = count * n.get();
+        let chunks = (letters + per / 2).checked_div(per).unwrap_or(0).max(1);
+        Ngrams { n, words, grams: Weighted::new(grams), chunks }
     }
 
     /// Whether the prose holds no run of N letters.
@@ -50,15 +52,19 @@ impl Ngrams {
         &self.words
     }
 
-    /// `count` made-up words, each as many n-grams as it takes to reach the
-    /// length of a word of the prose.
+    /// Letters in each made-up word, the same for all of them.
+    pub fn length(&self) -> usize {
+        self.chunks * self.n.get()
+    }
+
+    /// `count` made-up words of [`Ngrams::length`] letters.
     pub fn take(&self, count: usize, rng: &mut Rng) -> Vec<String> {
         if self.is_empty() {
             return Vec::new();
         }
         let word = |rng: &mut Rng| {
-            let chunks = self.lengths.pick(rng).div_ceil(self.n.get());
-            (0..chunks).map(|_| self.grams.pick(rng).as_str()).collect()
+            let grams = (0..self.chunks).map(|_| self.grams.pick(rng));
+            grams.map(String::as_str).collect()
         };
         (0..count).map(|_| word(rng)).collect()
     }
@@ -133,19 +139,26 @@ mod tests {
 
     #[test]
     fn words_are_strung_from_whole_grams() {
-        let n = ngrams(&["the cat sat on the mat"], 2);
+        let n = ngrams(&["these cats sat on their mats"], 2);
         let held = grams(&n);
         let mut rng = Rng::with_seed(3);
         let made = n.take(200, &mut rng);
         assert_eq!(made.len(), 200);
         for word in &made {
             let chars: Vec<char> = word.chars().collect();
-            assert!(matches!(chars.len(), 2 | 4), "{word}");
+            assert_eq!(chars.len(), 4, "{word}");
             for gram in chars.chunks(2) {
                 let gram: String = gram.iter().collect();
                 assert!(held.contains(gram.as_str()), "{word}");
             }
         }
+    }
+
+    #[test]
+    fn words_take_the_mean_length_in_whole_grams() {
+        let text = ["a bb cccc dddddd"];
+        let lengths = [1, 2, 3, 5].map(|n| ngrams(&text, n).length());
+        assert_eq!(lengths, [3, 4, 3, 5], "13 letters over 4 runs");
     }
 
     #[test]

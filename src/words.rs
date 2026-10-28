@@ -1,54 +1,158 @@
 //! Word sources: the bundled lists, passages of real prose, and texts typed
 //! in order.
 
+use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use clap::ValueEnum;
+use clap::builder::{EnumValueParser, PossibleValue, TypedValueParser};
+use clap::{Arg, Command, ValueEnum};
 use fastrand::Rng;
 
 use crate::chain::Chain;
+use crate::ngrams::Ngrams;
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+/// What a test types, as `--mode` takes it; see [`Mode::to_possible_value`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Random words from the language's list.
-    #[value(alias = "w")]
     Words,
-    /// Passages of real prose: the classics, your texts and external ones.
-    #[value(alias = "t")]
     Text,
-    /// Passages of the bundled public-domain classics only.
-    #[value(alias = "c")]
     Classics,
-    /// Passages `oui external` extracted into ~/.oui/external/.
-    #[value(name = "ext", aliases = ["external", "e"])]
     External,
-    /// Words that follow each other as in that prose: phrases that almost
-    /// mean something.
-    #[value(aliases = ["funnywords", "f"])]
     Funny,
-    /// Random words richest in the bigrams that cost your tests of the
-    /// language the most time, misses included.
-    #[value(alias = "p")]
     Practice,
+    /// Made-up words of N-letter runs.
+    Ngrams(NonZeroUsize),
 }
 
 impl Mode {
-    pub fn name(self) -> &'static str {
-        match self {
-            Mode::Words => "words",
-            Mode::Text => "text",
-            Mode::Classics => "classics",
-            Mode::External => "ext",
-            Mode::Funny => "funny",
-            Mode::Practice => "practice",
-        }
-    }
-
     /// Whether the mode types whole passages, which take no extras.
     pub fn passages(self) -> bool {
         matches!(self, Mode::Text | Mode::Classics | Mode::External)
+    }
+}
+
+// By hand rather than derived, since `ngrams:N` carries its N.
+impl ValueEnum for Mode {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            Mode::Words,
+            Mode::Text,
+            Mode::Classics,
+            Mode::External,
+            Mode::Funny,
+            Mode::Practice,
+            Mode::Ngrams(NonZeroUsize::MIN),
+        ]
+    }
+
+    fn from_str(input: &str, ignore_case: bool) -> Result<Self, String> {
+        if let Some(n) = order(input, ignore_case) {
+            return Ok(Mode::Ngrams(n));
+        }
+        let named = |mode: &&Mode| {
+            let value = mode.to_possible_value();
+            value.is_some_and(|v| v.matches(input, ignore_case))
+        };
+        let mode = Self::value_variants().iter().find(named).copied();
+        mode.ok_or_else(|| format!("invalid variant: {input}"))
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let (name, aliases, help): (_, &[_], _) = match self {
+            Mode::Words => {
+                ("words", &["w"], "Random words from the language's list")
+            }
+            Mode::Text => (
+                "text",
+                &["t"],
+                "Passages of real prose: the classics, your texts and \
+                 external ones",
+            ),
+            Mode::Classics => (
+                "classics",
+                &["c"],
+                "Passages of the bundled public-domain classics only",
+            ),
+            Mode::External => (
+                "ext",
+                &["external", "e"],
+                "Passages `oui external` extracted into ~/.oui/external/",
+            ),
+            Mode::Funny => (
+                "funny",
+                &["funnywords", "f"],
+                "Words that follow each other as in that prose: phrases \
+                 that almost mean something",
+            ),
+            Mode::Practice => (
+                "practice",
+                &["p"],
+                "Random words richest in the bigrams that cost your tests \
+                 of the language the most time, misses included",
+            ),
+            Mode::Ngrams(_) => (
+                "ngrams",
+                &["n"],
+                "Made-up words strung from the letters of that prose, each \
+                 as often as it holds it; ngrams:N (or nN) strings N-letter \
+                 runs instead, so n2 types bigrams",
+            ),
+        };
+        Some(PossibleValue::new(name).aliases(aliases).help(help))
+    }
+}
+
+/// The N of `ngrams:N` or `nN`.
+fn order(input: &str, ignore_case: bool) -> Option<NonZeroUsize> {
+    let input = match ignore_case {
+        true => input.to_lowercase(),
+        false => input.to_string(),
+    };
+    let n = input.strip_prefix("ngrams:").or_else(|| input.strip_prefix('n'));
+    n?.parse().ok()
+}
+
+/// As history records it and `--mode` takes it back.
+impl fmt::Display for Mode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match (self, self.to_possible_value()) {
+            (Mode::Ngrams(n), _) => write!(f, "ngrams:{n}"),
+            (_, Some(value)) => f.write_str(value.get_name()),
+            (_, None) => unreachable!("every mode has a value"),
+        }
+    }
+}
+
+/// `--mode` as clap's enum parser takes it, plus `ngrams:N`. Name it in
+/// `value_parser = ModeParser`: `value_parser!` would pick the enum parser.
+#[derive(Debug, Clone, Copy)]
+pub struct ModeParser;
+
+impl TypedValueParser for ModeParser {
+    type Value = Mode;
+
+    fn parse_ref(
+        &self,
+        cmd: &Command,
+        arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Mode, clap::Error> {
+        let ignore_case = arg.is_some_and(Arg::is_ignore_case_set);
+        if let Some(n) = value.to_str().and_then(|v| order(v, ignore_case)) {
+            return Ok(Mode::Ngrams(n));
+        }
+        EnumValueParser::<Mode>::new().parse_ref(cmd, arg, value)
+    }
+
+    fn possible_values(
+        &self,
+    ) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
+        let values = Mode::value_variants().iter();
+        Some(Box::new(values.filter_map(ValueEnum::to_possible_value)))
     }
 }
 
@@ -182,6 +286,8 @@ pub enum Source {
     },
     /// Walks over which word follows which in prose.
     Funny(Chain),
+    /// Made-up words strung from the letter n-grams of prose.
+    Ngrams(Ngrams),
 }
 
 impl Source {
@@ -203,6 +309,7 @@ impl Source {
             | Source::Text(words)
             | Source::Passages { words, .. } => words,
             Source::Funny(chain) => chain.words(),
+            Source::Ngrams(ngrams) => ngrams.words(),
         }
     }
 
@@ -239,6 +346,7 @@ impl Source {
         match self {
             Source::Random(pool) => sample(pool, n, rng),
             Source::Funny(chain) => chain.walk(n, rng),
+            Source::Ngrams(ngrams) => ngrams.take(n, rng),
             Source::Text(text) | Source::Passages { words: text, .. } => {
                 if text.is_empty() {
                     return Vec::new();
@@ -318,18 +426,47 @@ mod tests {
 
     #[test]
     fn modes_are_named_as_the_cli_takes_them() {
-        for &mode in Mode::value_variants() {
-            let value = mode.to_possible_value().unwrap();
-            assert_eq!(mode.name(), value.get_name());
+        let three = Mode::Ngrams(NonZeroUsize::new(3).unwrap());
+        for &mode in Mode::value_variants().iter().chain([&three]) {
+            let name = mode.to_string();
+            assert_eq!(Mode::from_str(&name, false), Ok(mode), "{name}");
+        }
+        assert_eq!(three.to_string(), "ngrams:3");
+    }
+
+    #[test]
+    fn ngrams_take_their_order_and_default_to_letters() {
+        let n = |n| Ok(Mode::Ngrams(NonZeroUsize::new(n).unwrap()));
+        assert_eq!(Mode::from_str("ngrams", true), n(1));
+        assert_eq!(Mode::from_str("ngrams:2", true), n(2));
+        assert_eq!(Mode::from_str("N3", true), n(3));
+        assert!(Mode::from_str("N3", false).is_err());
+        for bad in ["n0", "ngrams:", "ngrams:x", "ngrams2", "nope"] {
+            assert!(Mode::from_str(bad, true).is_err(), "{bad}");
         }
     }
 
     #[test]
     fn modes_answer_to_their_first_letter() {
         for &mode in Mode::value_variants() {
-            let letter = &mode.name()[..1];
+            let letter = &mode.to_string()[..1];
             assert_eq!(Mode::from_str(letter, true), Ok(mode), "{letter}");
         }
+    }
+
+    #[test]
+    fn clap_parses_ngrams_with_their_order() {
+        let arg = Arg::new("mode").long("mode");
+        let cmd = Command::new("t").arg(arg.value_parser(ModeParser));
+        let parse = |v: &str| {
+            let m = cmd.clone().try_get_matches_from(["t", "--mode", v]);
+            m.map(|m| *m.get_one::<Mode>("mode").unwrap())
+        };
+        let two = Mode::Ngrams(NonZeroUsize::new(2).unwrap());
+        assert_eq!(parse("ngrams:2").unwrap(), two);
+        assert_eq!(parse("n2").unwrap(), two);
+        assert_eq!(parse("f").unwrap(), Mode::Funny);
+        assert!(parse("n0").is_err());
     }
 
     #[test]

@@ -24,6 +24,7 @@ oui -m text -l french     # a passage of real French prose
 oui -m classics           # a passage of the bundled classics only
 oui -m ext                # a passage of external texts (see below)
 oui -m funny              # words that follow each other as in prose
+oui -m n2                 # made-up words of the language's bigrams
 oui -p                    # words that drill your costliest bigrams
 oui -t 60                 # a timed test of 60 seconds
 oui notes.txt             # your own text, in order
@@ -34,7 +35,7 @@ oui stats                 # everything recorded so far
 |---|---|
 | `FILE` | Type this text in order instead of random words. |
 | `-l, --language` | `english` (default), `french`, `russian`; for text mode, also any language you keep texts for. |
-| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and external ones; `classics`: the bundled classics only; `ext` (or `external`): the external texts only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something; `practice`: see `-p`. Each also takes its first letter: `-m t`. |
+| `-m, --mode` | `words` (default); `text`: a random passage of real prose -- the classics, your texts and external ones; `classics`: the bundled classics only; `ext` (or `external`): the external texts only; `funny` (or `funnywords`): words that follow each other as they do in that prose, so phrases almost mean something; `practice`: see `-p`; `ngrams`: made-up words strung from that prose's letters, each as often as it holds it, and `ngrams:N` (or `nN`) from its runs of N letters, so `-m n2` types bigrams. Each also takes its first letter: `-m t`. |
 | `-p, --practice` | Short for `-m practice`: random words richest in the bigrams that cost your recorded tests of the language the most time; see [Practice](#practice). |
 | `-W, --with` | Extras for random words, comma-separated: `punctuation`, `numbers`, `capitals`, `symbols` (or `p`, `n`, `c`, `s`). |
 | `-w, --words` | Words in the test: 50, the whole file, or one passage. |
@@ -78,7 +79,9 @@ cost per keystroke are the pool a test draws from at random, honouring
 `-w`, `-t` and `-W`. No target leads more than a fifth of the pool while
 others still have words, and the title names the three costliest.
 Practice tests are recorded like any other, so the pool follows your
-typing as it improves. `p` on the results drills as usual.
+typing as it improves. `p` on the results drills as usual. Ngrams tests
+are left out: made-up words type slower than the language and hold pairs
+it never does.
 `oui stats -p` lists each language's targets -- pairs, misses, mean gap,
 time lost -- and the words they draw.
 

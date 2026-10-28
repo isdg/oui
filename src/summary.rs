@@ -526,6 +526,7 @@ fn mode_colour(mode: &str) -> u8 {
         "funny" => 138,
         "practice" => 103,
         "file" => 65,
+        m if m.starts_with("ngrams:") => 144,
         _ => 243,
     }
 }

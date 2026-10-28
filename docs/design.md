@@ -141,6 +141,18 @@ fallback keeps walks from retracing a passage, so phrases read like the
 language while sentences drift into nonsense. Words are lowercased and
 bare of punctuation, as in words mode, and take `--with` extras the same.
 
+### Ngrams mode
+
+`--mode ngrams:N` counts the N-letter runs inside the words of the same
+passages, lowercased and split at anything not a letter, so `dit-il`
+holds `dit` and `il` but no `t-i`. Counting running prose rather than the
+word list weighs each n-gram by how often it is typed. A made-up word
+takes a word length L from the prose and strings ⌈L/N⌉ n-grams drawn by
+count: N=1 types letters as often as the language does, N=2 its bigrams,
+with the seams between n-grams left to chance. Tests record their mode as
+`ngrams:N`; practice and the `p` drill of a words test leave them out, as
+made-up words set a slower pace and hold pairs the language never types.
+
 ### Drill
 
 `p` scores every word in the pool by how many weak bigrams it contains — word
@@ -171,6 +183,7 @@ src/
   words.rs     bundled lists, text sources, sampling, drills
   practice.rs  costliest bigrams and the words richest in them, for -p
   chain.rs     word chains over prose for --mode funny
+  ngrams.rs    made-up words of letter n-grams for --mode ngrams
   session.rs   typing state machine and keystroke log
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline
   plot.rs      plc-style line chart

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::builder::ArgPredicate;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use fastrand::Rng;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
@@ -21,12 +21,13 @@ use oui::external;
 use oui::extras::{Decorator, Extra};
 use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
+use oui::ngrams::Ngrams;
 use oui::practice::{self, Target};
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
 use oui::ui;
-use oui::words::{self, Mode, Source};
+use oui::words::{self, Mode, ModeParser, Source};
 
 const DEFAULT_LANGUAGE: &str = "english";
 /// Words in a test when neither `--words` nor a file says otherwise.
@@ -50,7 +51,7 @@ Files:
                          line; flags override them:
                            language = russian
                            mode     = words        # text, classics, ext, funny,
-                                                   # practice
+                                                   # practice, ngrams:2
                            with     = punctuation, numbers
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
@@ -129,12 +130,12 @@ struct TestArgs {
     /// texts in ~/.oui/texts/<language>/ or external ones for --mode text.
     #[arg(short, long, conflicts_with = "file")]
     language: Option<String>,
-    /// Random words (default), passages of real prose, or practice; each
-    /// mode also takes its first letter.
+    /// Random words (default), passages of real prose, practice, or made-up
+    /// words of n-grams; each mode also takes its first letter.
     #[arg(
         short,
         long,
-        value_enum,
+        value_parser = ModeParser,
         conflicts_with = "file",
         default_value_if("practice", ArgPredicate::IsPresent, "practice")
     )]
@@ -428,10 +429,13 @@ impl App {
     }
 }
 
-/// Reports of the last [`RECENT`] recorded tests of the same source.
+/// Reports of the last [`RECENT`] recorded tests of the same source, made-up
+/// words only if this test types them.
 fn recent(store: &Store, meta: &Meta) -> Result<Vec<Report>> {
     let records = store.load()?.records;
-    let same = records.iter().filter(|r| r.meta.source == meta.source);
+    let same = records.iter().filter(|r| {
+        r.meta.source == meta.source && made_up(&r.meta) == made_up(meta)
+    });
     let mut reports: Vec<Report> = same.map(Record::report).collect();
     reports.drain(..reports.len().saturating_sub(RECENT - 1));
     Ok(reports)
@@ -615,12 +619,10 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     let with: Vec<String> =
         extras.iter().map(|e| e.name().to_string()).collect();
     let mode = match source {
-        Source::Random(_) => cli.mode.unwrap_or(Mode::Words).name(),
-        Source::Text(_) => "file",
-        Source::Passages { .. } => cli.mode.unwrap_or(Mode::Text).name(),
-        Source::Funny(_) => "funny",
+        Source::Text(_) => "file".to_string(),
+        _ => cli.mode.unwrap_or(Mode::Words).to_string(),
     };
-    let mut what = match mode {
+    let mut what = match mode.as_str() {
         "words" | "file" => name.clone(),
         _ => format!("{name} {mode}"),
     };
@@ -644,7 +646,7 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
     let meta = Meta {
         source: name,
-        mode: mode.to_string(),
+        mode,
         with,
         layout: layout.name().to_string(),
         cite: None,
@@ -687,6 +689,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         cli.language.clone().unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
     if cli.mode == Some(Mode::Practice) {
         let records = select(store.load()?.records, None, Some(&language));
+        let records = practised(records);
         let (targets, words) = practice_pool(&language, &records, store)?;
         let focus = targets.iter().take(FOCUS).map(|t| t.bigram).collect();
         return Ok((Source::Random(words), language, focus));
@@ -710,7 +713,8 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         }
         return Ok((Source::passages(passages), language, Vec::new()));
     }
-    if let Some(mode @ (Mode::Text | Mode::Funny)) = cli.mode {
+    if let Some(mode @ (Mode::Text | Mode::Funny | Mode::Ngrams(_))) = cli.mode
+    {
         let texts = store.dir().join("texts");
         let mut passages = words::load_passages(&language, &texts)?;
         passages.extend(words::external(&language, &external)?);
@@ -723,6 +727,13 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         }
         let source = match mode {
             Mode::Funny => Source::Funny(Chain::new(&passages)),
+            Mode::Ngrams(n) => {
+                let ngrams = Ngrams::new(&passages, n);
+                if ngrams.is_empty() {
+                    bail!("no {n} letters in a row in the '{language}' texts");
+                }
+                Source::Ngrams(ngrams)
+            }
             _ => Source::passages(passages),
         };
         return Ok((source, language, Vec::new()));
@@ -762,13 +773,24 @@ fn practice_pool(
     Ok((targets, words))
 }
 
+/// The `records` practice draws on: all but those of made-up words.
+fn practised(records: Vec<Record>) -> Vec<Record> {
+    records.into_iter().filter(|r| !made_up(&r.meta)).collect()
+}
+
+/// Whether a test typed made-up words, so its pace is no baseline for
+/// typing the language and its bigrams may be ones it never holds.
+fn made_up(meta: &Meta) -> bool {
+    matches!(Mode::from_str(&meta.mode, false), Ok(Mode::Ngrams(_)))
+}
+
 /// What practice targets in each language of the selected tests.
 fn practice_summary(
     store: &Store,
     last: Option<NonZeroUsize>,
     source: Option<&str>,
 ) -> Result<()> {
-    let records = select(store.load()?.records, last, source);
+    let records = practised(select(store.load()?.records, last, source));
     let mut languages: Vec<&str> =
         records.iter().map(|r| r.meta.source.as_str()).collect();
     languages.sort_unstable();
@@ -792,7 +814,7 @@ fn limit(cli: &TestArgs, source: &Source) -> Limit {
     match (cli.words, source) {
         (Some(n), _) => Limit::Words(n.get()),
         (None, Source::Text(text)) => Limit::Words(text.len()),
-        (None, Source::Random(_) | Source::Funny(_)) => {
+        (None, Source::Random(_) | Source::Funny(_) | Source::Ngrams(_)) => {
             Limit::Words(DEFAULT_WORDS)
         }
         (None, Source::Passages { .. }) => Limit::Passage,
@@ -919,6 +941,37 @@ mod tests {
             vocab.iter().any(|v| v.to_lowercase() == bare.to_lowercase())
         };
         assert!(session.words().iter().all(known));
+    }
+
+    #[test]
+    fn ngrams_mode_strings_made_up_words_and_takes_extras() {
+        let args = cli(&["-m", "n2", "-l", "russian", "-W", "c"]);
+        let setup = setup(&args, &no_home()).unwrap();
+        assert_eq!(setup.title, "russian ngrams:2 with capitals · 50 words");
+        assert_eq!(setup.meta.mode, "ngrams:2");
+        assert_eq!(setup.layout, Layout::Jcuken);
+        let app = App::new(setup, None);
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words().len(), DEFAULT_WORDS);
+        for word in session.words() {
+            let letters = word.chars().filter(|c| c.is_alphabetic()).count();
+            assert_eq!(letters % 2, 0, "{word}");
+        }
+        let mode = |args: &TestArgs| {
+            super::setup(args, &no_home()).map(|s| s.meta.mode)
+        };
+        assert_eq!(mode(&cli(&["--mode", "ngrams"])).unwrap(), "ngrams:1");
+        let config = oui::config::parse("mode = ngrams:3").unwrap();
+        assert_eq!(mode(&merge(&cli(&[]), &config)).unwrap(), "ngrams:3");
+        let err = mode(&cli(&["-m", "n99"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "no 99 letters in a row in the 'english' texts"
+        );
+        assert!(Cli::try_parse_from(["oui", "-m", "n0"]).is_err());
+        assert!(
+            Cli::try_parse_from(["oui", "-m", "ngrams:2", "f.txt"]).is_err()
+        );
     }
 
     #[test]
@@ -1178,6 +1231,26 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('p'));
         assert!(!app.feed.drill.is_empty(), "drills still work");
+    }
+
+    #[test]
+    fn practice_and_drills_leave_made_up_words_apart() {
+        let tmp = TempDir::new("made-up");
+        let store = slow_qu(&tmp);
+        let made_up = |record: Record| Record {
+            meta: Meta { mode: "ngrams:2".into(), ..record.meta },
+            ..record
+        };
+        let records = store.load().unwrap().records;
+        fs::remove_file(store.history()).unwrap();
+        store.append(&made_up(records[0].clone())).unwrap();
+        let err = setup(&cli(&["-p"]), &store).err().unwrap().to_string();
+        assert!(err.starts_with("no english tests to practise on"), "{err}");
+        store.append(&records[0]).unwrap();
+        let ngrams = setup(&cli(&["-m", "n2"]), &store).unwrap().meta;
+        let words = setup(&cli(&[]), &store).unwrap().meta;
+        assert_eq!(recent(&store, &ngrams).unwrap().len(), 1);
+        assert_eq!(recent(&store, &words).unwrap().len(), 1);
     }
 
     #[test]

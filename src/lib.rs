@@ -8,6 +8,7 @@ pub mod fingering;
 pub mod geometry;
 pub mod history;
 pub mod keyboard;
+pub mod ngrams;
 pub mod plot;
 pub mod practice;
 pub mod session;

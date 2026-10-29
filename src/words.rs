@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use clap::builder::{EnumValueParser, PossibleValue, TypedValueParser};
+use clap::error::{ContextKind, ContextValue};
 use clap::{Arg, Command, ValueEnum};
 use fastrand::Rng;
 
@@ -155,6 +156,32 @@ impl TypedValueParser for ModeParser {
         let values = Mode::value_variants().iter();
         Some(Box::new(values.filter_map(ValueEnum::to_possible_value)))
     }
+}
+
+/// `err` with each mode it lists spelled with its letter, `words|w`, if it
+/// lists the modes: clap's own list holds names alone.
+pub fn with_letters(mut err: clap::Error) -> clap::Error {
+    let values = |spell: fn(&PossibleValue) -> Option<String>| {
+        let values = Mode::value_variants().iter();
+        let values = values.filter_map(ValueEnum::to_possible_value);
+        values.filter_map(|v| spell(&v)).collect::<Vec<_>>()
+    };
+    let names = values(|v| Some(v.get_name().to_string()));
+    let lists_modes = matches!(
+        err.get(ContextKind::ValidValue),
+        Some(ContextValue::Strings(listed)) if *listed == names
+    );
+    if lists_modes {
+        let spelled = values(|v| {
+            let letter = v.get_name_and_aliases().find(|a| a.len() == 1)?;
+            Some(match v.get_name() {
+                "ngrams" => format!("ngrams[:N]|{letter}[N]"),
+                name => format!("{name}|{letter}"),
+            })
+        });
+        err.insert(ContextKind::ValidValue, ContextValue::Strings(spelled));
+    }
+    err
 }
 
 /// Bundled word lists, keyed by the name `--language` takes.
@@ -469,6 +496,27 @@ mod tests {
         assert_eq!(parse("n2").unwrap(), two);
         assert_eq!(parse("f").unwrap(), Mode::Funny);
         assert!(parse("n0").is_err());
+    }
+
+    #[test]
+    fn mode_errors_list_each_letter() {
+        let arg = Arg::new("mode").long("mode").value_parser(ModeParser);
+        let cmd = Command::new("t").arg(arg);
+        let error = |args: &[&str]| {
+            let err = cmd.clone().try_get_matches_from(args).unwrap_err();
+            with_letters(err).to_string()
+        };
+        let listed = "[possible values: words|w, text|t, classics|c, \
+                      ext|e, funny|f, practice|p, ngrams[:N]|n[N]]";
+        for args in [&["t", "--mode"][..], &["t", "--mode", "nope"]] {
+            let err = error(args);
+            assert!(err.contains(listed), "{err}");
+        }
+        let other = Arg::new("k").long("k").value_parser(["a", "b"]);
+        let cmd = Command::new("t").arg(other);
+        let err = cmd.try_get_matches_from(["t", "--k", "c"]).unwrap_err();
+        let err = with_letters(err).to_string();
+        assert!(err.contains("[possible values: a, b]"), "{err}");
     }
 
     #[test]

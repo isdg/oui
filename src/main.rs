@@ -458,7 +458,8 @@ fn save(
 }
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli =
+        Cli::try_parse().unwrap_or_else(|err| words::with_letters(err).exit());
     let store = Store::open()?;
     match cli.cmd {
         Some(Cmd::Stats {

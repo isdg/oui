@@ -159,6 +159,40 @@ impl Store {
             .with_context(|| format!("writing {}", path.display()))
     }
 
+    /// Takes the latest line recording `record` out of the history; false
+    /// if none does.
+    pub fn remove(&self, record: &Record) -> Result<bool> {
+        let path = self.history();
+        let line = serde_json::to_string(record)?;
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(false)
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("reading {}", path.display()))
+            }
+        };
+        let mut lines: Vec<&str> = text.lines().collect();
+        let Some(i) = lines.iter().rposition(|l| *l == line) else {
+            return Ok(false);
+        };
+        lines.remove(i);
+        let mut kept = lines.join("\n");
+        if !kept.is_empty() {
+            kept.push('\n');
+        }
+        // Written beside the history, then renamed over it, so a failure
+        // midway leaves the history whole.
+        let tmp = path.with_extension("jsonl.tmp");
+        fs::write(&tmp, kept)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        fs::rename(&tmp, &path)
+            .with_context(|| format!("replacing {}", path.display()))?;
+        Ok(true)
+    }
+
     /// Every readable record, oldest first; a missing file is no history.
     pub fn load(&self) -> Result<History> {
         let path = self.history();
@@ -298,6 +332,29 @@ mod tests {
             history.records.iter().map(|r| r.at.as_str()).collect();
         assert_eq!(at, ["t0", "t1"]);
         assert_eq!(history.skipped, 0);
+    }
+
+    #[test]
+    fn remove_takes_out_the_latest_line_of_a_record() {
+        let tmp = TempDir::new("remove");
+        let store = Store::at(&tmp.0);
+        let record = |at: &str| {
+            let (s, now) = played(&["a"], "a", None);
+            Record::new(&s, now, at.to_string(), meta())
+        };
+        let (a, b) = (record("t0"), record("t1"));
+        assert!(!store.remove(&a).unwrap(), "no file yet");
+        for r in [&a, &b, &a] {
+            store.append(r).unwrap();
+        }
+        assert!(store.remove(&a).unwrap());
+        assert_eq!(store.load().unwrap().records, [a.clone(), b.clone()]);
+        assert!(store.remove(&a).unwrap());
+        assert!(!store.remove(&a).unwrap(), "no line left of it");
+        assert!(store.remove(&b).unwrap());
+        assert_eq!(fs::read_to_string(store.history()).unwrap(), "");
+        let left: Vec<_> = fs::read_dir(&tmp.0).unwrap().collect();
+        assert_eq!(left.len(), 1, "no temporary file stays");
     }
 
     #[test]

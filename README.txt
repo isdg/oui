@@ -93,9 +93,10 @@ While typing:
 On the results screen, tab flips the heatmap between errors and speed, o
 shows the text you typed -- hits green, misses red, the rest dimmed, with
 its citation; up/down scroll it and o goes back -- r starts a new test, p
-starts a drill and q quits. For a text or a file, c continues it: the next
-test starts where this one stopped, so a text can be read through passage
-by passage. A new text test starts a work from its first passage.
+starts a drill, i takes the test just typed out of the history -- and i
+again puts it back -- and q quits. For a text or a file, c continues it:
+the next test starts where this one stopped, so a text can be read through
+passage by passage. A new text test starts a work from its first passage.
 
 A drill draws words in proportion to how many of your weakest bigrams they
 contain -- the three most missed and the three slowest over your last 20

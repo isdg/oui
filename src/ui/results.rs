@@ -17,6 +17,16 @@ const PLOT_ROWS: usize = 8;
 /// Entries per ranking.
 const TOP: usize = 5;
 
+/// The keys a results screen offers when the test allows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Keys {
+    /// `c` continues the text.
+    pub resume: bool,
+    /// `i` takes the test out of the history if it is in it (`true`), or
+    /// puts it back.
+    pub incognito: Option<bool>,
+}
+
 pub fn draw(
     frame: &mut Frame,
     report: &Report,
@@ -24,7 +34,7 @@ pub fn draw(
     measure: Measure,
     title: &str,
     notice: Option<&str>,
-    resume: bool,
+    offered: Keys,
 ) {
     use Constraint::{Fill, Length};
 
@@ -63,10 +73,15 @@ pub fn draw(
     ] {
         frame.render_widget(Paragraph::new(lines(ranking)), area);
     }
-    let go_on = if resume { "c continue · " } else { "" };
+    let go_on = if offered.resume { "c continue · " } else { "" };
+    let incognito = match offered.incognito {
+        Some(true) => "i incognito · ",
+        Some(false) => "i record · ",
+        None => "",
+    };
     let keys = format!(
-        " r new test · {go_on}p drill weak bigrams · tab errors/speed · \
-         o text · q quit"
+        " r new test · {go_on}p drill · tab errors/speed · o text · \
+         {incognito}q quit"
     );
     frame.render_widget(Line::from(keys).dim(), footer);
     if let Some(notice) = notice {
@@ -252,16 +267,21 @@ mod tests {
 
     #[test]
     fn screen_shows_every_section() {
-        let draw = |resume| {
+        let draw = |keys: Keys| {
             let (layout, measure) = (Layout::Qwerty, Measure::Speed);
             let rows = render(100, 30, |f| {
-                draw(f, &report(), layout, measure, "english", None, resume)
+                draw(f, &report(), layout, measure, "english", None, keys)
             });
             rows.join("\n")
         };
-        assert!(draw(true).contains("r new test · c continue · p drill"));
-        let screen = draw(false);
+        let all = draw(Keys { resume: true, incognito: Some(true) });
+        assert!(all.contains("r new test · c continue · p drill"), "{all}");
+        assert!(all.contains("o text · i incognito · q quit"), "{all}");
+        let out = draw(Keys { resume: false, incognito: Some(false) });
+        assert!(out.contains("o text · i record · q quit"), "{out}");
+        let screen = draw(Keys::default());
         assert!(!screen.contains("continue"), "{screen}");
+        assert!(screen.contains("o text · q quit"), "{screen}");
         for needle in [
             "oui · english",
             "WPM          : 64",

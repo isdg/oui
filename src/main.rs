@@ -27,6 +27,7 @@ use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
 use oui::ui;
+use oui::ui::results::Keys;
 use oui::words::{self, Mode, ModeParser, Source, Texts};
 
 const DEFAULT_LANGUAGE: &str = "english";
@@ -261,6 +262,9 @@ struct App {
     incognito: bool,
     /// Shown on the results screen, e.g. when a record could not be saved.
     notice: Option<String>,
+    /// The record of the test on the results screen, and whether the
+    /// history holds it: `i` takes it out and puts it back.
+    record: Option<(Record, bool)>,
     /// The last [`RECENT`] tests of this source, which drills draw on.
     recent: Vec<Report>,
     screen: Screen,
@@ -292,6 +296,7 @@ impl App {
             store,
             incognito,
             notice,
+            record: None,
             recent,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
         };
@@ -306,6 +311,7 @@ impl App {
 
     /// Starts a test at word `start` of the source, wrapping past its end.
     fn begin(&mut self, start: usize) {
+        self.record = None;
         self.feed.drawn = 0;
         self.feed.decorator.reset();
         self.feed.start = start % self.feed.source.words().len().max(1);
@@ -323,13 +329,18 @@ impl App {
     }
 
     fn title(&self) -> String {
-        if self.feed.drill.is_empty() {
-            return self.title.clone();
+        let mut title = self.title.clone();
+        if !self.feed.drill.is_empty() {
+            let show = |&(a, b): &(char, char)| {
+                format!("{}{}", ui::show(a), ui::show(b))
+            };
+            let drill: Vec<String> = self.feed.drill.iter().map(show).collect();
+            title = format!("{title} · drill {}", drill.join(" "));
         }
-        let show =
-            |&(a, b): &(char, char)| format!("{}{}", ui::show(a), ui::show(b));
-        let drill: Vec<String> = self.feed.drill.iter().map(show).collect();
-        format!("{} · drill {}", self.title, drill.join(" "))
+        if matches!(self.record, Some((_, false))) {
+            title.push_str(" · incognito");
+        }
+        title
     }
 
     /// Advances the clock; returns to results once the session is over.
@@ -347,7 +358,10 @@ impl App {
             let meta = Meta { cite, ..self.meta.clone() };
             let store = self.store.as_ref().filter(|_| !self.incognito);
             let saved = save(store, session, now, &meta);
-            self.notice = saved.err().map(|e| format!("not saved: {e:#}"));
+            (self.record, self.notice) = match saved {
+                Ok(record) => (record.map(|r| (r, true)), None),
+                Err(e) => (None, Some(format!("not saved: {e:#}"))),
+            };
             let report = Report::new(session, session.elapsed(now));
             if !session.log().is_empty() {
                 self.recent.push(report.clone());
@@ -360,6 +374,24 @@ impl App {
                 session: session.clone(),
                 review: None,
             };
+        }
+    }
+
+    /// Takes the test on the results screen out of the history, or puts
+    /// it back.
+    fn toggle_recorded(&mut self) {
+        let (Some(store), Some((record, kept))) =
+            (&self.store, &mut self.record)
+        else {
+            return;
+        };
+        let done = match *kept {
+            true => store.remove(record).map(drop),
+            false => store.append(record),
+        };
+        match done {
+            Ok(()) => (*kept, self.notice) = (!*kept, None),
+            Err(e) => self.notice = Some(format!("history: {e:#}")),
         }
     }
 
@@ -398,6 +430,7 @@ impl App {
             Screen::Results { measure, session, review, .. } => {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return false,
+                    KeyCode::Char('i') => self.toggle_recorded(),
                     KeyCode::Char('o') => {
                         *review = if review.is_some() { None } else { Some(0) };
                     }
@@ -448,13 +481,16 @@ impl App {
             Screen::Results { report, measure, .. } => {
                 let notice = self.notice.as_deref();
                 let (layout, measure) = (self.layout, *measure);
-                let resume = self.feed.resume.is_some();
+                let keys = Keys {
+                    resume: self.feed.resume.is_some(),
+                    incognito: self.record.as_ref().map(|(_, kept)| *kept),
+                };
                 let title = match cite {
                     Some(cite) => format!("{title} · {cite}"),
                     None => title,
                 };
                 ui::results::draw(
-                    frame, report, layout, measure, &title, notice, resume,
+                    frame, report, layout, measure, &title, notice, keys,
                 )
             }
         }
@@ -473,20 +509,21 @@ fn recent(store: &Store, meta: &Meta) -> Result<Vec<Report>> {
     Ok(reports)
 }
 
-/// Records a finished session, unless nothing was typed.
+/// Records a finished session, unless nothing was typed; the record made.
 fn save(
     store: Option<&Store>,
     session: &Session,
     now: Instant,
     meta: &Meta,
-) -> Result<()> {
-    let Some(store) = store else { return Ok(()) };
+) -> Result<Option<Record>> {
+    let Some(store) = store else { return Ok(None) };
     if session.log().is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let at = chrono::Local::now()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-    store.append(&Record::new(session, now, at, meta.clone()))
+    let record = Record::new(session, now, at, meta.clone());
+    store.append(&record).map(|()| Some(record))
 }
 
 fn main() -> Result<()> {
@@ -1657,6 +1694,47 @@ mod tests {
         assert_eq!(store.load().unwrap().records.len(), 1, "not recorded");
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.feed.drill, [('c', 'd')]);
+    }
+
+    #[test]
+    fn i_takes_the_shown_test_out_of_the_history_and_back() {
+        let tmp = TempDir::new("after");
+        let store = Store::at(&tmp.0);
+        let recorded = || store.load().unwrap().records;
+        let setup = test_setup(words("ab cd"), Limit::Words(1));
+        let mut app = App::new(setup, Some(store.clone()));
+        let type_out = |app: &mut App| {
+            for c in "ab".chars() {
+                press(app, KeyCode::Char(c));
+            }
+        };
+        type_out(&mut app);
+        press(&mut app, KeyCode::Char('r'));
+        type_out(&mut app);
+        let both = recorded();
+        assert_eq!(both.len(), 2);
+
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(recorded(), both[..1], "the earlier test stays");
+        assert_eq!(app.title(), "t · incognito");
+        assert!(app.notice.is_none());
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(recorded(), both, "back as it was");
+        assert_eq!(app.title(), "t");
+
+        press(&mut app, KeyCode::Char('i'));
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.title(), "t", "a new test is recorded again");
+        type_out(&mut app);
+        assert_eq!(recorded().len(), 2);
+
+        let mut setup = test_setup(words("ab"), Limit::Words(1));
+        setup.incognito = true;
+        let mut app = App::new(setup, Some(store.clone()));
+        type_out(&mut app);
+        press(&mut app, KeyCode::Char('i'));
+        assert_eq!(recorded().len(), 2, "nothing to take out or put back");
+        assert!(app.record.is_none());
     }
 
     #[test]

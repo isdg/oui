@@ -25,7 +25,7 @@ use oui::ngrams::Ngrams;
 use oui::practice::{self, Target};
 use oui::session::{Input, Session};
 use oui::stats::{self, Report};
-use oui::summary::{self, Period, View};
+use oui::summary::{self, Period, Speed, View};
 use oui::ui;
 use oui::words::{self, Mode, ModeParser, Source};
 
@@ -100,6 +100,10 @@ enum Cmd {
         /// plotted per period instead of per test.
         #[arg(short, long, value_enum)]
         by: Option<Period>,
+        /// Show speeds in characters a minute, five to the word of WPM,
+        /// plots included.
+        #[arg(short, long)]
+        cpm: bool,
         /// Add the heatmaps and the key and bigram rankings.
         #[arg(short, long)]
         detailed: bool,
@@ -478,11 +482,14 @@ fn main() -> Result<()> {
             source,
             layout,
             by,
+            cpm,
             detailed,
             geometry,
             practice,
         }) => {
-            let view = View { by, detailed, geometry, ..View::default() };
+            let speed = if cpm { Speed::Cpm } else { Speed::Wpm };
+            let view =
+                View { by, speed, detailed, geometry, ..View::default() };
             stats(&store, last, source.as_deref(), layout, view)?;
             if practice {
                 practice_summary(&store, last, source.as_deref())?;
@@ -1239,11 +1246,14 @@ mod tests {
                 source: Some("russian".into()),
                 layout: None,
                 by: None,
+                cpm: false,
                 detailed: false,
                 geometry: false,
                 practice: false,
             })
         );
+        let cpm = parse(&["stats", "-c"]).unwrap().cmd;
+        assert!(matches!(cpm, Some(Cmd::Stats { cpm: true, .. })));
         assert!(parse(&["stats", "-w", "10"]).is_err());
         let by = parse(&["stats", "--by", "week"]).unwrap().cmd;
         assert!(matches!(by, Some(Cmd::Stats { by: Some(Period::Week), .. })));

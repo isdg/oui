@@ -142,6 +142,7 @@ what was. oui stats reads it back:
                                     # rankings
     > oui stats -n 20 -s russian    # the last 20 Russian tests
     > oui stats --by week           # a table of weeks, WPM plotted per week
+    > oui stats --cpm               # speeds in characters a minute: 5 x WPM
     > oui stats --geometry          # plus fingers, rows and hand moves
     > oui stats --practice          # plus what -p targets, and its words
 

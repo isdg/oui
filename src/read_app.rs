@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -25,6 +25,8 @@ use oui::words;
 
 const DEFAULT_LANGUAGE: &str = "english";
 const FRAME: Duration = Duration::from_millis(100);
+/// Between frames of a sliding text, which moves a character at a time.
+const SLIDE_FRAME: Duration = Duration::from_millis(30);
 
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReadArgs {
@@ -39,6 +41,11 @@ pub struct ReadArgs {
     /// Words to read, up to the end of a paragraph (default 400).
     #[arg(short, long)]
     words: Option<NonZeroUsize>,
+    /// Slide the text past at this many WPM, five characters a word,
+    /// instead of paging through it at your own speed: the test of a
+    /// pace, which counts if the text was still taken in.
+    #[arg(short, long, value_name = "WPM")]
+    pace: Option<NonZeroU32>,
     /// Read FILE from its start again.
     #[arg(short, long, requires = "file")]
     restart: bool,
@@ -74,6 +81,15 @@ struct Plan {
 }
 
 impl Plan {
+    /// The test of it, sliding past at `pace` if one is set.
+    fn test(&self, pace: Option<NonZeroU32>) -> ReadTest {
+        let test = ReadTest::new(self.paragraphs.clone(), self.probes.clone());
+        match pace {
+            Some(pace) => test.paced(pace),
+            None => test,
+        }
+    }
+
     fn title(&self) -> String {
         let words: usize = self.paragraphs.iter().map(Vec::len).sum();
         let excerpts = if self.origin.continuous { "" } else { " excerpts" };
@@ -234,7 +250,7 @@ impl App {
         let texts = texts(store.as_ref());
         let plan =
             plan(&args, &language, args.restart, &texts, &seen, &mut rng)?;
-        let test = ReadTest::new(plan.paragraphs.clone(), plan.probes.clone());
+        let test = plan.test(args.pace);
         let notice = plan.notice.clone();
         Ok(App {
             args,
@@ -257,8 +273,7 @@ impl App {
         let (args, language) = (&self.args, &self.language);
         match plan(args, language, false, &texts, &self.seen, &mut self.rng) {
             Ok(plan) => {
-                self.test =
-                    ReadTest::new(plan.paragraphs.clone(), plan.probes.clone());
+                self.test = plan.test(self.args.pace);
                 self.notice = plan.notice.clone();
                 self.plan = plan;
                 self.record = None;
@@ -337,11 +352,38 @@ impl App {
         };
         if let Some(input) = input {
             self.test.apply(input, now);
-            if self.test.stage() == Stage::Done && self.record.is_none() {
-                self.finish();
-            }
+            self.settle();
         }
         true
+    }
+
+    /// Advances the clock of a sliding text.
+    fn tick(&mut self, now: Instant) {
+        self.test.tick(now);
+        self.settle();
+    }
+
+    /// Records the test once it is done.
+    fn settle(&mut self) {
+        if self.test.stage() == Stage::Done && self.record.is_none() {
+            self.finish();
+        }
+    }
+
+    fn title(&self) -> String {
+        match self.args.pace {
+            Some(pace) => format!("{} · {pace} wpm", self.plan.title()),
+            None => self.plan.title(),
+        }
+    }
+
+    /// How long to wait for a key before drawing again.
+    fn frame(&self) -> Duration {
+        let slides = self.test.pace().is_some();
+        match slides && self.test.stage() == Stage::Reading {
+            true => SLIDE_FRAME,
+            false => FRAME,
+        }
     }
 
     /// Draws the screen, the pages laid out for the terminal as it is.
@@ -351,10 +393,13 @@ impl App {
         let (width, height) = ui::read::text_size(area.width, area.height);
         let pages = ui::read::pages(self.test.paragraphs(), width, height);
         self.test.lay(pages, now);
-        let title = self.plan.title();
+        let title = self.title();
         let cite = self.plan.origin.cite.as_deref();
         match (self.test.stage(), &self.record) {
             (Stage::Ready, _) => ui::read::ready(frame, &self.test, &title),
+            (Stage::Reading, _) if self.test.pace().is_some() => {
+                ui::read::stripe(frame, &self.test, &title, now)
+            }
             (Stage::Reading, _) => {
                 ui::read::page(frame, &self.test, &title, cite)
             }
@@ -390,8 +435,10 @@ pub fn run(
 
 fn event_loop(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
     loop {
-        terminal.draw(|frame| app.draw(frame, Instant::now()))?;
-        if !event::poll(FRAME)? {
+        let now = Instant::now();
+        app.tick(now);
+        terminal.draw(|frame| app.draw(frame, now))?;
+        if !event::poll(app.frame())? {
             continue;
         }
         let Event::Key(key) = event::read()? else { continue };
@@ -591,6 +638,33 @@ mod tests {
         assert!(store.load_reads().unwrap().records.is_empty());
         press(&mut app, KeyCode::Char('r'));
         assert_eq!(app.plan.origin.start, 80, "read all the same");
+    }
+
+    #[test]
+    fn a_paced_test_runs_on_the_clock_and_records_its_pace() {
+        let tmp = TempDir::new("pace");
+        let file = book(&tmp.0, 30);
+        let store = Store::at(tmp.0.join("home"));
+        let pace = NonZeroU32::new(300);
+        let args = ReadArgs { pace, ..args(&file, 80) };
+        let mut app = App::new(args, None, Some(store.clone())).unwrap();
+        assert_eq!(app.title(), "read · book.txt · 80 words · 300 wpm");
+        assert_eq!(app.frame(), FRAME);
+        let t0 = Instant::now();
+        app.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), t0);
+        assert_eq!(app.frame(), SLIDE_FRAME);
+        press(&mut app, KeyCode::Char(' '));
+        let slide = app.test.slide().unwrap();
+        app.tick(t0 + slide - Duration::from_millis(1));
+        assert_eq!(app.test.stage(), Stage::Reading, "no key hurries it");
+        app.tick(t0 + slide);
+        assert_eq!((app.test.stage(), app.frame()), (Stage::Probing, FRAME));
+        while app.test.stage() != Stage::Done {
+            press(&mut app, KeyCode::Char('n'));
+        }
+        let record = &store.load_reads().unwrap().records[0];
+        assert_eq!(record.pace, Some(300.0));
+        assert!((record.wpm - 300.0).abs() < 0.5, "{}", record.wpm);
     }
 
     #[test]

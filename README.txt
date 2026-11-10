@@ -153,6 +153,7 @@ without anyone having written questions about it:
     > oui read article.md       # a markdown article, its prose only
     > oui read -w 800 book.txt  # a longer stretch
     > oui read -r book.txt      # from the start of the book again
+    > oui read -p 350 book.txt  # the text slides past at 350 WPM
     > oui read -l french        # excerpts of a bundled French work
 
 The text stays hidden until space starts the clock. It comes a page at a
@@ -179,10 +180,18 @@ read, one never typed nor read before; excerpts do not read as a story
 does, so these tests are marked and kept apart from the others. Tests go
 to ~/.oui/reads.jsonl: the time on each page and every answer.
 
+-p WPM tests a pace instead of finding yours: the text slides through the
+stripe of the typing screen at that speed, five characters a word, with
+no way to slow it or go back, and the same ten sentences follow. Such a
+test counts when the pace still let the text in; raise the pace until it
+does not. A sliding line is harder to read than a page, so the paces that
+count say nothing of your speed on a page, and stats list them apart.
+
 oui stats ends with these tests: how many count, the sentences told right
 over all of them with hits and false alarms, then per text the median WPM
-and words a minute of the tests that count -- running prose and excerpts
-on rows of their own. -n and -s select them as they do typing tests.
+and words a minute of the tests that count -- running prose, excerpts
+and paced tests on rows of their own. -n and -s select them as they do
+typing tests.
 
 -------------------------------------------------------------------------------
 HISTORY AND STATS

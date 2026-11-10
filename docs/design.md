@@ -215,6 +215,12 @@ and the reader says which.
   number, so a resize re-lays the pages and loses nothing.
 - **Rates**: WPM at five characters a word for comparison with typing, and
   words as written a minute for comparison with published rates.
+- **Pace**: `--pace WPM` slides the text through the typing screen's
+  stripe by the clock instead, with no key to slow it: the same probes
+  then tell whether that pace let the text in. It measures the fastest
+  pace followed, not a speed of one's own, and a sliding line reads
+  unlike a page, so the record carries `pace` and stats keep it apart.
+  The end is timed from the pace, not from the frame that notices it.
 - **Counting**: a test counts from 80% right. Ten probes are a coarse
   gate (guessing passes one time in eighteen); the pooled rate is the one
   to trust.
@@ -255,7 +261,7 @@ screen is tested against ratatui's `TestBackend`.
 
 ```
 oui [FILE] [-l LANG] [-w N | -t SECS] [-k qwerty|jcuken]
-oui read [FILE] [-l LANG] [-w N] [-r] [-i]
+oui read [FILE] [-l LANG] [-w N] [-p WPM] [-r] [-i]
 ```
 
 `FILE` types a text in order instead of random words. `-w` defaults to 50

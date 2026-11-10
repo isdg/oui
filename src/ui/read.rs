@@ -2,22 +2,24 @@
 //! a page at a time, the probes one by one, and the results.
 
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Stylize;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding, Paragraph};
 use ratatui::Frame;
 
 use super::results::rule;
-use super::typing::wrap;
-use super::{clock, lines};
+use super::typing::{slide, wrap};
+use super::{clock, lines, MAX_WIDTH};
 use crate::read::ReadTest;
 use crate::reads::{Asked, ReadRecord, Turn, PASS};
 
 /// Columns of text at most: longer lines are slower to read.
 const MEASURE: u16 = 72;
+/// Characters either side of its centre a sliding text lays out.
+const REACH: usize = 120;
 /// Columns of the results' summary, the pages beside it.
 const SUMMARY: u16 = 48;
 /// Columns and rows around the text: its border and padding, the header
@@ -107,17 +109,23 @@ fn centred(frame: &mut Frame, area: Rect, block: Block, text: Vec<Line>) {
 /// Before the clock starts: what is about to be read, the text unseen.
 pub fn ready(frame: &mut Frame, test: &ReadTest, title: &str) {
     let (area, footer) = frame_of(frame, title);
-    let text = vec![
-        Line::from(format!(
-            "{} words on {} pages, then {} sentences to recognise.",
-            test.words(),
-            test.pages().len(),
-            test.probes().len()
-        )),
-        Line::default(),
-        Line::from("Read as you would read anything: the clock starts"),
-        Line::from("with the first page and stops with the last."),
-    ];
+    let (words, probes) = (test.words(), test.probes().len());
+    let then = format!("then {probes} sentences to recognise.");
+    let text = match test.slide() {
+        Some(slide) => vec![
+            format!("{words} words slide past in {}, {then}", clock(slide)),
+            String::new(),
+            "Keep up with the text: it does not wait, and it".to_string(),
+            "does not come back.".to_string(),
+        ],
+        None => vec![
+            format!("{words} words on {} pages, {then}", test.pages().len()),
+            String::new(),
+            "Read as you would read anything: the clock starts".to_string(),
+            "with the first page and stops with the last.".to_string(),
+        ],
+    };
+    let text = lines(text);
     centred(frame, area, block(None), text);
     let keys = " space start · esc quit";
     frame.render_widget(Line::from(keys).dim(), footer);
@@ -151,6 +159,27 @@ pub fn page(
     frame.render_widget(Line::from(keys).dim(), footer);
     let at = format!("{}/{} ", test.page() + 1, test.pages().len());
     frame.render_widget(Line::from(at).dim().right_aligned(), footer);
+}
+
+/// A paced text sliding past the centre of the typing screen's stripe.
+pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
+    use Constraint::{Fill, Length};
+
+    let area = frame.area().centered_horizontally(Constraint::Max(MAX_WIDTH));
+    let [header, _, slider, _, footer] =
+        Layout::vertical([Length(1), Fill(1), Length(3), Fill(1), Length(1)])
+            .areas(area);
+    let heading = Line::from(vec![" oui".bold(), format!(" · {title}").into()]);
+    frame.render_widget(heading, header);
+    let words: Vec<&str> =
+        test.paragraphs().iter().flatten().map(String::as_str).collect();
+    let text: Vec<char> = words.join(" ").chars().collect();
+    let at = test.slid(now).min(text.len());
+    let from = at.saturating_sub(REACH);
+    let to = (at + REACH).min(text.len());
+    let shown: String = text[from..to].iter().collect();
+    slide(frame, slider, vec![Span::raw(shown)], at - from);
+    frame.render_widget(Line::from(" esc abandon").dim(), footer);
 }
 
 /// A sentence to recognise, the text out of sight.
@@ -332,6 +361,30 @@ mod tests {
         assert!(rows[4].contains("A, B ┘"), "{screen}");
         assert!(rows[5].contains("space next"), "{screen}");
         assert!(rows[5].trim_end().ends_with("2/3"), "{screen}");
+    }
+
+    #[test]
+    fn a_paced_text_slides_through_the_centre_of_its_stripe() {
+        // 600 WPM is fifty characters a second.
+        let pace = std::num::NonZeroU32::new(600).unwrap();
+        let mut test = test().paced(pace);
+        let rows = render(70, 10, |f| ready(f, &test, "en"));
+        let screen = rows.join("\n");
+        assert!(screen.contains("7 words slide past in 0:00, then 2"));
+        let t0 = Instant::now();
+        test.apply(Input::Next, t0);
+        let at = |ms| {
+            let now = t0 + Duration::from_millis(ms);
+            render(24, 7, |f| stripe(f, &test, "en", now))
+        };
+        // Twenty-two columns inside the border: the centre is the 12th.
+        let rows = at(0);
+        assert_eq!(rows[3], "│           aa bb cc dd│", "{rows:?}");
+        let rows = at(120);
+        assert_eq!(rows[3], "│     aa bb cc dd ee ff│", "six gone by");
+        let rows = at(400);
+        assert_eq!(rows[3], "│dd ee ff gg           │", "its end");
+        assert!(rows[6].contains("esc abandon"));
     }
 
     #[test]

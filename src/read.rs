@@ -2,8 +2,9 @@
 //! whether it was taken in. The test is a state machine over plain data;
 //! the pages it turns are laid out by whoever draws it.
 
+use std::num::NonZeroU32;
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::external;
 use crate::probes::Probe;
@@ -152,6 +153,8 @@ pub struct ReadTest {
     since: Option<Instant>,
     turns: Vec<Turn>,
     answers: Vec<(bool, u64)>,
+    /// The WPM the text slides past at, rather than being paged through.
+    pace: Option<u32>,
 }
 
 impl ReadTest {
@@ -166,7 +169,65 @@ impl ReadTest {
             since: None,
             turns: Vec::new(),
             answers: Vec::new(),
+            pace: None,
         }
+    }
+
+    /// The test with its text sliding past at `wpm`, five characters a
+    /// word, for the reader to keep up with.
+    pub fn paced(self, wpm: NonZeroU32) -> Self {
+        ReadTest { pace: Some(wpm.get()), ..self }
+    }
+
+    pub fn pace(&self) -> Option<u32> {
+        self.pace
+    }
+
+    /// Characters of the text, a space after each word included.
+    pub fn chars(&self) -> usize {
+        let words = self.paragraphs.iter().flatten();
+        words.map(|w| w.chars().count() + 1).sum()
+    }
+
+    /// Milliseconds a character takes to slide past at `pace`.
+    fn per_char(pace: u32) -> f64 {
+        60_000.0 / (f64::from(pace) * stats::CHARS_PER_WORD)
+    }
+
+    /// How long the whole text takes to slide past, if it does.
+    pub fn slide(&self) -> Option<Duration> {
+        let ms = Self::per_char(self.pace?) * self.chars() as f64;
+        Some(Duration::from_millis(ms.round() as u64))
+    }
+
+    /// Characters of a sliding text gone past by `now`.
+    pub fn slid(&self, now: Instant) -> usize {
+        let Some(pace) = self.pace.filter(|_| self.stage == Stage::Reading)
+        else {
+            return 0;
+        };
+        let slid = self.shown(now) as f64 / Self::per_char(pace);
+        (slid as usize).min(self.chars())
+    }
+
+    /// Advances the clock: a sliding text ends once all of it has gone
+    /// past, at the pace set whatever the frame it is noticed on.
+    pub fn tick(&mut self, now: Instant) {
+        let Some(slide) = self.slide() else { return };
+        let ms = u64::try_from(slide.as_millis()).unwrap_or(u64::MAX);
+        if self.stage == Stage::Reading && self.shown(now) >= ms {
+            self.turns.push(Turn(0, self.words(), ms));
+            self.since = Some(now);
+            self.close();
+        }
+    }
+
+    /// Ends the reading: on to the probes, if there are any.
+    fn close(&mut self) {
+        self.stage = match self.probes.is_empty() {
+            true => Stage::Done,
+            false => Stage::Probing,
+        };
     }
 
     pub fn paragraphs(&self) -> &[Vec<String>] {
@@ -206,7 +267,8 @@ impl ReadTest {
     /// holding the first word shown stays, and the time on the old one is
     /// kept as a turn of its own.
     pub fn lay(&mut self, pages: Vec<Range<usize>>, now: Instant) {
-        if pages.is_empty() || pages == self.pages {
+        let paged = self.pace.is_none();
+        if !paged || pages.is_empty() || pages == self.pages {
             return;
         }
         if self.stage == Stage::Reading {
@@ -222,12 +284,13 @@ impl ReadTest {
                 self.stage = Stage::Reading;
                 self.since = Some(now);
             }
+            // A sliding text turns no pages.
+            (Stage::Reading, _) if self.pace.is_some() => {}
             (Stage::Reading, Input::Next) => {
                 self.turn(now);
                 match self.pages.get(self.page() + 1) {
                     Some(next) => self.top = next.start,
-                    None if self.probes.is_empty() => self.stage = Stage::Done,
-                    None => self.stage = Stage::Probing,
+                    None => self.close(),
                 }
             }
             (Stage::Reading, Input::Back) => {
@@ -269,8 +332,7 @@ impl ReadTest {
         origin: Origin,
         size: (u16, u16),
     ) -> ReadRecord {
-        let words = self.paragraphs.iter().flatten();
-        let chars = words.map(|w| w.chars().count() + 1).sum();
+        let chars = self.chars();
         let elapsed_ms = self.turns.iter().map(|t| t.2).sum();
         let asked = |(probe, &(answer, ms)): (&Probe, &(bool, u64))| {
             Asked(probe.text.clone(), probe.old, answer, ms)
@@ -288,7 +350,7 @@ impl ReadTest {
             chars,
             elapsed_ms,
             wpm: 0.0,
-            pace: None,
+            pace: self.pace.map(f64::from),
             turns: self.turns.clone(),
             probes: self.probes.iter().zip(&self.answers).map(asked).collect(),
             cols: size.0,
@@ -443,6 +505,36 @@ mod tests {
             ]
         );
         assert_eq!((record.cols, record.rows), (80, 24));
+    }
+
+    #[test]
+    fn a_paced_text_slides_past_at_its_pace_and_ends_by_itself() {
+        // Ten characters at 600 WPM, fifty a second: 200 ms.
+        let pace = NonZeroU32::new(600).unwrap();
+        let mut t = test(&[true]).paced(pace);
+        let t0 = Instant::now();
+        assert_eq!(t.slide(), Some(Duration::from_millis(200)));
+        assert_eq!(t.slid(t0), 0, "not started");
+        t.apply(Input::Next, t0);
+        t.lay(vec![0..2, 2..5], t0);
+        assert_eq!(t.pages().len(), 1, "nothing to lay out");
+        t.tick(t0 + MS * 100);
+        assert_eq!((t.stage(), t.slid(t0 + MS * 100)), (Stage::Reading, 5));
+        t.apply(Input::Next, t0 + MS * 120);
+        t.apply(Input::Back, t0 + MS * 130);
+        assert!(t.turns.is_empty(), "no pages to turn");
+        t.tick(t0 + MS * 260);
+        assert_eq!(t.stage(), Stage::Probing, "the end was noticed late");
+        t.apply(Input::Yes, t0 + MS * 300);
+        let record = t.record("t".into(), Origin::default(), (80, 24));
+        assert_eq!(record.turns, [Turn(0, 5, 200)]);
+        assert_eq!((record.pace, record.wpm), (Some(600.0), 600.0));
+        assert_eq!(record.probes[0].3, 40, "answered from the late frame");
+        assert_eq!(test(&[]).slide(), None, "paged tests do not slide");
+        let mut unasked = test(&[]).paced(pace);
+        unasked.apply(Input::Next, t0);
+        unasked.tick(t0 + MS * 200);
+        assert_eq!(unasked.stage(), Stage::Done);
     }
 
     #[test]

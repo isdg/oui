@@ -101,6 +101,8 @@ passage by passage. A new text test starts a work from its first passage.
 A drill draws words in proportion to how many of your weakest bigrams they
 contain -- the three most missed and the three slowest over your last 20
 tests of that language -- and keeps drilling on tab until you press r.
+Drills are recorded as drills: oui stats plots them as a kind of their own,
+whatever mode they began in.
 
 -------------------------------------------------------------------------------
 PRACTICE

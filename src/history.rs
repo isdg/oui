@@ -48,6 +48,9 @@ pub struct Meta {
     /// Prose typed `--plain`: lowercase, bare of punctuation and numbers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plain: bool,
+    /// A drill on weak bigrams, started from a test of this mode.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drill: bool,
     pub layout: String,
     /// Where a text-mode passage is from, when its text cites it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,6 +267,7 @@ mod tests {
             mode: "words".into(),
             with: vec![],
             plain: false,
+            drill: false,
             layout: "qwerty".into(),
             cite: None,
         }

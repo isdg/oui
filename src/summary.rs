@@ -10,7 +10,7 @@ use clap::ValueEnum;
 
 use crate::fingering::{Fingering, Mark, Marked};
 use crate::geometry::{self, Finger, Geometry};
-use crate::history::Record;
+use crate::history::{Meta, Record};
 use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
 use crate::practice::Target;
@@ -128,7 +128,7 @@ pub fn render(records: &[Record], view: &View) -> String {
             let modes: Vec<Vec<&str>> = records
                 .iter()
                 .filter(|r| r.completed)
-                .map(|r| vec![shown(&r.meta.mode)])
+                .map(|r| vec![shown(&r.meta)])
                 .collect();
             let modes = view.colour.then_some(modes.as_slice());
             out.push_str(&wpm_plot("per completed test", &wpms, modes));
@@ -441,7 +441,7 @@ fn completed<'a>(records: &'a [&Record]) -> impl Iterator<Item = f64> + 'a {
 
 fn modes<'a>(records: &[&'a Record]) -> Vec<&'a str> {
     let completed = records.iter().filter(|r| r.completed);
-    completed.map(|r| shown(&r.meta.mode)).collect()
+    completed.map(|r| shown(&r.meta)).collect()
 }
 
 fn completed_mean(records: &[&Record]) -> Option<f64> {
@@ -529,9 +529,13 @@ fn dominant<'a>(modes: &[&'a str]) -> &'a str {
     best
 }
 
-/// The mode a recorded one is shown as: `text` for passages of any texts.
-fn shown(mode: &str) -> &str {
-    match mode {
+/// The kind a recorded test is shown as: `drill` whatever mode it began
+/// in, `text` for passages of any texts, else its mode.
+fn shown(meta: &Meta) -> &str {
+    if meta.drill {
+        return "drill";
+    }
+    match meta.mode.as_str() {
         // What `text:classics` and `text:external` were recorded as before.
         "classics" | "ext" | "feed" => "text",
         m if m.starts_with("text:") => "text",
@@ -546,6 +550,7 @@ fn mode_colour(mode: &str) -> u8 {
         "text" => 101,
         "funny" => 138,
         "practice" => 103,
+        "drill" => 131,
         "file" => 65,
         m if m.starts_with("ngrams:") => 144,
         _ => 243,
@@ -609,7 +614,6 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::history::Meta;
     use crate::session::{Input, Session};
 
     fn summary() -> View {
@@ -724,11 +728,16 @@ mod tests {
     fn the_commonest_mode_names_a_column() {
         assert_eq!(dominant(&["text", "words", "words"]), "words");
         assert_eq!(dominant(&["funny", "text"]), "funny", "ties go first");
+        let meta = |mode: &str| Meta { mode: mode.into(), ..Meta::default() };
         for mode in ["text:classics", "text:external", "classics", "ext"] {
-            assert_eq!(shown(mode), "text", "{mode}");
+            assert_eq!(shown(&meta(mode)), "text", "{mode}");
         }
-        assert_eq!(shown("feed"), "text", "as external was first recorded");
-        assert_eq!((shown("words"), shown("ngrams:2")), ("words", "ngrams:2"));
+        assert_eq!(shown(&meta("feed")), "text", "external's first name");
+        for mode in ["words", "ngrams:2"] {
+            assert_eq!(shown(&meta(mode)), mode);
+            let drill = Meta { drill: true, ..meta(mode) };
+            assert_eq!(shown(&drill), "drill");
+        }
     }
 
     #[test]

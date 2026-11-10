@@ -355,7 +355,8 @@ impl App {
                 self.feed.resume = Some(self.feed.start + session.current());
             }
             let cite = self.feed.cite().map(str::to_owned);
-            let meta = Meta { cite, ..self.meta.clone() };
+            let drill = !self.feed.drill.is_empty();
+            let meta = Meta { cite, drill, ..self.meta.clone() };
             let store = self.store.as_ref().filter(|_| !self.incognito);
             let saved = save(store, session, now, &meta);
             (self.record, self.notice) = match saved {
@@ -739,6 +740,7 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
         mode,
         with,
         plain,
+        drill: false,
         layout: layout.name().to_string(),
         cite: None,
     };
@@ -1662,6 +1664,15 @@ mod tests {
         assert_eq!(completed, [true, false]);
         assert!(records.iter().all(|r| r.meta.cite.is_none()));
         assert!(app.notice.is_none());
+
+        app.feed.drill = vec![('a', 'b')];
+        app.restart();
+        press(&mut app, KeyCode::Char('a'));
+        press(&mut app, KeyCode::Esc);
+        let records = store.load().unwrap().records;
+        let drills: Vec<bool> = records.iter().map(|r| r.meta.drill).collect();
+        assert_eq!(drills, [false, false, true], "a drill is recorded as one");
+        assert_eq!(records[2].meta.mode, records[0].meta.mode);
     }
 
     #[test]

@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::reads::{self, ReadRecord};
 use crate::session::{Keystroke, Session};
 use crate::stats::Report;
 
@@ -119,10 +121,16 @@ pub struct Store {
 }
 
 /// Records read back, and how many lines were unreadable or too new.
-#[derive(Debug, Clone, Default)]
-pub struct History {
-    pub records: Vec<Record>,
+#[derive(Debug, Clone)]
+pub struct History<T = Record> {
+    pub records: Vec<T>,
     pub skipped: usize,
+}
+
+impl<T> Default for History<T> {
+    fn default() -> Self {
+        History { records: Vec::new(), skipped: 0 }
+    }
 }
 
 impl Store {
@@ -148,77 +156,109 @@ impl Store {
         self.dir.join("history.jsonl")
     }
 
+    /// The reading tests, beside the history.
+    pub fn reads(&self) -> PathBuf {
+        self.dir.join("reads.jsonl")
+    }
+
     pub fn append(&self, record: &Record) -> Result<()> {
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
-        let path = self.history();
-        let mut line = serde_json::to_string(record)?;
-        line.push('\n');
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("opening {}", path.display()))?;
-        file.write_all(line.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))
+        append(&self.history(), record)
     }
 
     /// Takes the latest line recording `record` out of the history; false
     /// if none does.
     pub fn remove(&self, record: &Record) -> Result<bool> {
-        let path = self.history();
-        let line = serde_json::to_string(record)?;
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(false)
-            }
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("reading {}", path.display()))
-            }
-        };
-        let mut lines: Vec<&str> = text.lines().collect();
-        let Some(i) = lines.iter().rposition(|l| *l == line) else {
-            return Ok(false);
-        };
-        lines.remove(i);
-        let mut kept = lines.join("\n");
-        if !kept.is_empty() {
-            kept.push('\n');
-        }
-        // Written beside the history, then renamed over it, so a failure
-        // midway leaves the history whole.
-        let tmp = path.with_extension("jsonl.tmp");
-        fs::write(&tmp, kept)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, &path)
-            .with_context(|| format!("replacing {}", path.display()))?;
-        Ok(true)
+        remove(&self.history(), record)
     }
 
     /// Every readable record, oldest first; a missing file is no history.
     pub fn load(&self) -> Result<History> {
-        let path = self.history();
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(History::default())
-            }
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("reading {}", path.display()))
-            }
-        };
-        let mut history = History::default();
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            match serde_json::from_str::<Record>(line) {
-                Ok(r) if r.v <= VERSION => history.records.push(r),
-                _ => history.skipped += 1,
-            }
-        }
-        Ok(history)
+        load(&self.history(), |r: &Record| r.v <= VERSION)
     }
+
+    pub fn append_read(&self, record: &ReadRecord) -> Result<()> {
+        append(&self.reads(), record)
+    }
+
+    /// As [`Store::remove`], of a reading test.
+    pub fn remove_read(&self, record: &ReadRecord) -> Result<bool> {
+        remove(&self.reads(), record)
+    }
+
+    /// As [`Store::load`], of the reading tests.
+    pub fn load_reads(&self) -> Result<History<ReadRecord>> {
+        load(&self.reads(), |r: &ReadRecord| r.v <= reads::VERSION)
+    }
+}
+
+fn append<T: Serialize>(path: &Path, record: &T) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("creating {}", dir.display()))?;
+    }
+    let mut line = serde_json::to_string(record)?;
+    line.push('\n');
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    file.write_all(line.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn remove<T: Serialize>(path: &Path, record: &T) -> Result<bool> {
+    let line = serde_json::to_string(record)?;
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("reading {}", path.display()))
+        }
+    };
+    let mut lines: Vec<&str> = text.lines().collect();
+    let Some(i) = lines.iter().rposition(|l| *l == line) else {
+        return Ok(false);
+    };
+    lines.remove(i);
+    let mut kept = lines.join("\n");
+    if !kept.is_empty() {
+        kept.push('\n');
+    }
+    // Written beside the file, then renamed over it, so a failure midway
+    // leaves it whole.
+    let tmp = path.with_extension("jsonl.tmp");
+    fs::write(&tmp, kept)
+        .with_context(|| format!("writing {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("replacing {}", path.display()))?;
+    Ok(true)
+}
+
+/// The lines of `path` that parse into a record `readable` by this build.
+fn load<T: DeserializeOwned>(
+    path: &Path,
+    readable: fn(&T) -> bool,
+) -> Result<History<T>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(History::default())
+        }
+        Err(e) => {
+            return Err(e)
+                .with_context(|| format!("reading {}", path.display()))
+        }
+    };
+    let mut history = History::default();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str::<T>(line) {
+            Ok(r) if readable(&r) => history.records.push(r),
+            _ => history.skipped += 1,
+        }
+    }
+    Ok(history)
 }
 
 #[cfg(test)]
@@ -360,6 +400,26 @@ mod tests {
         assert_eq!(fs::read_to_string(store.history()).unwrap(), "");
         let left: Vec<_> = fs::read_dir(&tmp.0).unwrap().collect();
         assert_eq!(left.len(), 1, "no temporary file stays");
+    }
+
+    #[test]
+    fn reading_tests_are_kept_in_a_file_of_their_own() {
+        let tmp = TempDir::new("reads");
+        let store = Store::at(&tmp.0);
+        let record = reads::tests::record;
+        let (a, b) = (record("t0"), record("t1"));
+        assert!(store.load_reads().unwrap().records.is_empty());
+        assert!(!store.remove_read(&a).unwrap(), "no file yet");
+        store.append_read(&a).unwrap();
+        store.append_read(&b).unwrap();
+        let newer = ReadRecord { v: reads::VERSION + 1, ..record("t2") };
+        store.append_read(&newer).unwrap();
+        let history = store.load_reads().unwrap();
+        assert_eq!((&history.records, history.skipped), (&vec![a, b], 1));
+        assert!(store.remove_read(&history.records[0]).unwrap());
+        assert_eq!(store.load_reads().unwrap().records.len(), 1);
+        assert!(store.load().unwrap().records.is_empty(), "tests apart");
+        assert!(!store.history().exists());
     }
 
     #[test]

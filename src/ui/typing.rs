@@ -66,12 +66,10 @@ fn draw_header(
 
 /// One line scrolled so the cursor sits at its centre.
 fn draw_slider(frame: &mut Frame, area: Rect, s: &Session) {
-    let block = Block::bordered();
-    let inner = block.inner(area);
     let cur = s.current();
     let from = cur.saturating_sub(REACH);
     let to = (cur + REACH + 1).min(s.words().len());
-    let mut spans = vec![Span::raw(" ".repeat(usize::from(inner.width / 2)))];
+    let mut spans = Vec::new();
     let mut cursor = s.input().chars().count();
     for i in from..to {
         if i > from {
@@ -82,8 +80,22 @@ fn draw_slider(frame: &mut Frame, area: Rect, s: &Session) {
         }
         spans.extend(word(s, i));
     }
-    let scroll = u16::try_from(cursor).unwrap_or(u16::MAX);
-    let slider = Paragraph::new(Line::from(spans)).scroll((0, scroll));
+    slide(frame, area, spans, cursor);
+}
+
+/// A line in a bordered stripe, slid so that its character `at` sits at
+/// the centre.
+pub(super) fn slide(
+    frame: &mut Frame,
+    area: Rect,
+    mut line: Vec<Span<'static>>,
+    at: usize,
+) {
+    let block = Block::bordered();
+    let half = usize::from(block.inner(area).width / 2);
+    line.insert(0, Span::raw(" ".repeat(half)));
+    let scroll = u16::try_from(at).unwrap_or(u16::MAX);
+    let slider = Paragraph::new(Line::from(line)).scroll((0, scroll));
     frame.render_widget(slider.block(block), area);
 }
 

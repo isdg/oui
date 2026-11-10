@@ -187,6 +187,41 @@ and the reader still go on in its text. It replaced a drill that sampled
 the run's own words by their weak bigrams over the last 20 tests; records
 of those carry `drill` and are shown as practice.
 
+### Reading test
+
+`oui read` measures silent reading speed. A speed alone rewards skimming,
+so each test ends in a check that needs no authored questions: sentence
+recognition. Ten probes follow the text, each a sentence of it or a foil,
+and the reader says which.
+
+- **Foils** come from the unread remainder of the same text, so author,
+  style and names give nothing away; one the text also holds is dropped.
+  A foil must be unread, hence a test never reads to the end of its text
+  and a bundled work serves once.
+- **Targets** come one from each equal stretch of the text read, so no
+  part can be skipped unasked. Each probe is old or new by its own coin:
+  a fixed half would let the last answers be inferred.
+- **Sentences** end at `.` `?` `!` before a capital, initials and listed
+  abbreviations aside; those of 8 to 35 words are asked. A wrong cut makes
+  a fragment, and targets and foils are cut alike, so it is no cue.
+- **Text**: a FILE of running prose, read on from the last test of it (the
+  record keeps the canonical path, the first word and the word count; a
+  changed count starts over). The bundled passages are excerpts spread
+  through each book, not prose that runs on, so a work read without a
+  FILE is recorded as `continuous: false` and kept apart in stats.
+- **Clock**: from the key that shows the first page to the one that leaves
+  the last; no clock is shown, as it would hurry the reader. Time is
+  logged per stretch of words shown, `[first, end, ms]`, not per page
+  number, so a resize re-lays the pages and loses nothing.
+- **Rates**: WPM at five characters a word for comparison with typing, and
+  words as written a minute for comparison with published rates.
+- **Counting**: a test counts from 80% right. Ten probes are a coarse
+  gate (guessing passes one time in eighteen); the pooled rate is the one
+  to trust.
+
+Records go to `reads.jsonl`, apart from the typing history, whose readers
+expect keystrokes.
+
 ## Code layout
 
 ```
@@ -197,6 +232,10 @@ src/
   chain.rs     word chains over prose for --mode funny
   ngrams.rs    letter n-grams of prose as words for --mode ngrams
   session.rs   typing state machine and keystroke log
+  sentences.rs sentence ends in prose
+  probes.rs    sentences to recognise after a text, old and new
+  read.rs      reading test: text, stretch read, pages turned, clock
+  reads.rs     reading record and its scoring
   stats.rs     Report: WPM, accuracy, tallies, rankings, timeline
   plot.rs      plc-style line chart
   keyboard.rs  layouts, character → key, heat aggregation and glyphs
@@ -204,6 +243,7 @@ src/
   fingering.rs the fingers really used, inferred from pair timing
   ui/          typing and results screens (pure render functions)
   main.rs      CLI, terminal, event loop
+  read_app.rs  `oui read`: which text, keys, event loop
 ```
 
 Rendering functions take plain data and draw into a ratatui `Frame`, so each
@@ -213,6 +253,7 @@ screen is tested against ratatui's `TestBackend`.
 
 ```
 oui [FILE] [-l LANG] [-w N | -t SECS] [-k qwerty|jcuken]
+oui read [FILE] [-l LANG] [-w N] [-r] [-i]
 ```
 
 `FILE` types a text in order instead of random words. `-w` defaults to 50

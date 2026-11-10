@@ -31,6 +31,10 @@ use oui::ui::reader::{Reading, Scroll};
 use oui::ui::results::Keys;
 use oui::words::{self, Mode, ModeParser, Source, Texts};
 
+mod read_app;
+
+use read_app::ReadArgs;
+
 const DEFAULT_LANGUAGE: &str = "english";
 /// Words in a test when neither `--words` nor a file says otherwise.
 const DEFAULT_WORDS: usize = 50;
@@ -57,6 +61,8 @@ Files:
 Under $OUI_HOME, default ~/.oui:
   history.jsonl          every test, keystrokes included; read by `oui stats`
                          and --practice
+  reads.jsonl            every `oui read` test: the time on each page and
+                         each sentence's answer
   texts/<language>/*.txt your own passages for --mode text, blank-line
                          separated; a [[Author, Work]] line cites those
                          after it
@@ -111,6 +117,9 @@ enum Cmd {
         #[arg(short, long)]
         practice: bool,
     },
+    /// Time yourself reading a text silently, then tell sentences of it
+    /// from ones it never held: the speed counts if you can.
+    Read(ReadArgs),
     /// Extract passages of prose from an archive of markdown articles into
     /// ~/.oui/external/, adding only articles its readme.txt does not list.
     #[command(alias = "ext")]
@@ -613,6 +622,10 @@ fn main() -> Result<()> {
                 practice_summary(&store, last, source.as_deref())?;
             }
             Ok(())
+        }
+        Some(Cmd::Read(args)) => {
+            let config = config(&oui::config::path()?, &store)?;
+            read_app::run(args, config.language, store)
         }
         Some(Cmd::External { dirs }) => {
             let out = store.dir().join("external");

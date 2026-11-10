@@ -18,6 +18,8 @@ use crate::reads::{Asked, ReadRecord, Turn, PASS};
 
 /// Columns of text at most: longer lines are slower to read.
 const MEASURE: u16 = 72;
+/// Columns of the results' summary, the pages beside it.
+const SUMMARY: u16 = 48;
 /// Columns and rows around the text: its border and padding, the header
 /// and the footer.
 const CHROME: (u16, u16) = (4, 4);
@@ -181,16 +183,20 @@ pub fn results(
     notice: Option<&str>,
     kept: Option<bool>,
 ) {
+    use Constraint::{Fill, Length};
+
     let (area, footer) = frame_of(frame, title);
-    let width = usize::from(area.width);
-    let mut text = summary(record);
-    text.push(String::new());
-    text.push(rule("Pages", 34));
-    text.extend(record.turns.iter().map(turn));
-    text.push(String::new());
-    text.push(rule("Sentences", 34));
-    text.extend(record.probes.iter().map(|p| asked(p, width)));
-    frame.render_widget(Paragraph::new(lines(text)), area);
+    let [top, bottom] = Layout::vertical([Length(9), Fill(1)]).areas(area);
+    let [stats, pages] =
+        Layout::horizontal([Length(SUMMARY), Fill(1)]).areas(top);
+    frame.render_widget(Paragraph::new(lines(summary(record))), stats);
+    let mut turns = vec![rule("Pages", 24)];
+    turns.extend(record.turns.iter().map(turn));
+    frame.render_widget(Paragraph::new(lines(turns)), pages);
+    let width = usize::from(bottom.width);
+    let mut asked_of = vec![rule("Sentences", 34)];
+    asked_of.extend(record.probes.iter().map(|p| asked(p, width)));
+    frame.render_widget(Paragraph::new(lines(asked_of)), bottom);
     let incognito = match kept {
         Some(true) => "i incognito · ",
         Some(false) => "i record · ",
@@ -208,7 +214,7 @@ fn summary(r: &ReadRecord) -> Vec<String> {
     let (right, of) = r.right();
     let verdict = match r.counts() {
         true => "counts".to_string(),
-        false => format!("under {:.0}%, not counted", PASS * 100.0),
+        false => format!("under {:.0}%: not counted", PASS * 100.0),
     };
     let share = |(n, of): (usize, usize)| format!("{n}/{of}");
     vec![
@@ -231,7 +237,7 @@ fn turn(&Turn(start, end, ms): &Turn) -> String {
         ms => words as f64 * 60_000.0 / ms as f64,
     };
     let time = clock(Duration::from_millis(ms));
-    format!("  {words:>4} words  {time:>5}  {pace:>4.0} words/min")
+    format!("{words:>5} words {time:>5} {pace:>5.0}/min")
 }
 
 /// A probe on a row of `width`: whether the answer was right, where the
@@ -352,14 +358,14 @@ mod tests {
         let record = test.record("t".into(), Origin::default(), (80, 24));
         let notice = Some("not saved");
         let rows =
-            render(60, 20, |f| results(f, &record, "en", notice, Some(true)));
+            render(76, 20, |f| results(f, &record, "en", notice, Some(true)));
         let screen = rows.join("\n");
         assert!(screen.contains("WPM          : 252"), "{screen}");
         assert!(screen.contains("Words/min    : 420"), "{screen}");
         assert!(screen.contains("Recognised   : 1/2  (under 80%"), "{screen}");
         assert!(screen.contains("Hits         : 1/1"), "{screen}");
         assert!(screen.contains("False alarms : 1/1"), "{screen}");
-        assert!(screen.contains("7 words   0:01   420 words/min"), "{screen}");
+        assert!(screen.contains("7 words  0:01   420/min"), "{screen}");
         assert!(screen.contains("✓ read  It was read here."), "{screen}");
         assert!(screen.contains("✗ new   No."), "{screen}");
         assert!(rows[19].contains("i incognito · q quit"), "{screen}");

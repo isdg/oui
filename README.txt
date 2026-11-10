@@ -32,6 +32,7 @@ USE
     > oui -m n2                 # the language's bigrams, one a word
     > oui -p                    # words that drill your costliest bigrams
     > oui -t 60                 # a timed test of 60 seconds
+    > oui read book.txt         # reading speed instead (see OUI READ)
     > oui notes.txt             # your own text, in order
     > oui stats                 # everything recorded so far
 
@@ -140,6 +141,43 @@ READING THE RESULTS
     bigrams the pairs with the longest gap between keys. ␣ marks a word
     boundary, so ␣t is starting a word with t. Pauses over two seconds are
     left out.
+
+-------------------------------------------------------------------------------
+OUI READ
+-------------------------------------------------------------------------------
+
+oui read times silent reading, and checks that the text was taken in
+without anyone having written questions about it:
+
+    > oui read book.txt         # 400 words of a book, from your place in it
+    > oui read article.md       # a markdown article, its prose only
+    > oui read -w 800 book.txt  # a longer stretch
+    > oui read -r book.txt      # from the start of the book again
+    > oui read -l french        # excerpts of a bundled French work
+
+The text stays hidden until space starts the clock. It comes a page at a
+time, at most 72 columns wide -- space, enter, → or j turns the page, ← or
+k turns back -- and the clock stops when the last page is left; none is
+shown meanwhile. Then ten sentences come one by one, the text gone: y or →
+if the sentence was in what you read, n or ← if it was not. Those that
+were not are from the part of the same text still unread, so nothing but
+having read tells them apart; each is one or the other by its own coin, so
+their number tells nothing either. esc abandons a test unrecorded.
+
+The results give the speed twice: WPM at five characters a word, as typing
+tests count, and words as written a minute, as reading rates are published
+(about 240 for English non-fiction). A test counts when 8 of 10 sentences
+are told right; guessing gets there one time in eighteen, so trust the
+rate over many tests more than any one. r reads on, i takes the test out
+of the history or puts it back.
+
+A FILE of running prose -- a book from Project Gutenberg, an article -- is
+the text to measure with: each test reads on from where the last one
+stopped, in whole paragraphs, and stops short of the end so that sentences
+are left to ask about. Without a FILE the excerpts of a bundled work are
+read, one never typed nor read before; excerpts do not read as a story
+does, so these tests are marked and kept apart from the others. Tests go
+to ~/.oui/reads.jsonl: the time on each page and every answer.
 
 -------------------------------------------------------------------------------
 HISTORY AND STATS
@@ -255,9 +293,14 @@ FILES
 -------------------------------------------------------------------------------
 
     src/main.rs         CLI, config merge, terminal and the event loop
+    src/read_app.rs     oui read: its texts, keys and event loop
     src/session.rs      the typing state machine and keystroke log
     src/stats.rs        WPM, accuracy, timeline, key and bigram tallies
-    src/history.rs      the history.jsonl store
+    src/history.rs      the history.jsonl and reads.jsonl store
+    src/read.rs         the reading test: its text, pages and clock
+    src/reads.rs        a reading test as recorded and scored
+    src/sentences.rs    where the sentences of prose end
+    src/probes.rs       the sentences asked after a text
     src/summary.rs      oui stats
     src/geometry.rs     finger, hand and row per key; tallies over them
     src/fingering.rs    the fingers your timing implies

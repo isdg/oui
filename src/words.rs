@@ -395,32 +395,49 @@ impl Source {
         }
     }
 
-    /// The word a new test starts on: a random passage's first, else 0.
+    /// The word a new test starts on: the first of a random work, so the
+    /// tests continuing it read on from its start; else 0.
     pub fn start(&self, rng: &mut Rng) -> usize {
-        match self {
-            Source::Passages { starts, .. } if !starts.is_empty() => {
-                starts[rng.usize(..starts.len())]
-            }
-            _ => 0,
+        let Source::Passages { starts, cites, .. } = self else { return 0 };
+        // A work is a run of passages under one citation; uncited ones
+        // stand alone.
+        let opens = |&i: &usize| {
+            i == 0 || cites[i].is_none() || cites[i] != cites[i - 1]
+        };
+        let works: Vec<usize> = (0..starts.len()).filter(opens).collect();
+        match works.is_empty() {
+            true => 0,
+            false => starts[works[rng.usize(..works.len())]],
         }
     }
 
-    /// Words in the passage starting at word `start`.
-    pub fn passage_len(&self, start: usize) -> Option<usize> {
+    /// Whether the words come in an order a later test can go on from.
+    pub fn ordered(&self) -> bool {
+        matches!(self, Source::Text(_) | Source::Passages { .. })
+    }
+
+    /// The passage holding word `at`, by its place among the passages.
+    fn passage(&self, at: usize) -> Option<usize> {
         let Source::Passages { words, starts, .. } = self else {
             return None;
         };
-        let i = starts.iter().position(|&s| s == start)?;
-        Some(starts.get(i + 1).unwrap_or(&words.len()) - start)
+        let holds = at < words.len();
+        holds.then(|| starts.partition_point(|&s| s <= at) - 1)
     }
 
-    /// Where the passage starting at word `start` is from, if cited.
-    pub fn cite(&self, start: usize) -> Option<&str> {
-        let Source::Passages { starts, cites, .. } = self else {
+    /// Words from word `at` to the end of its passage.
+    pub fn passage_len(&self, at: usize) -> Option<usize> {
+        let Source::Passages { words, starts, .. } = self else {
             return None;
         };
-        let i = starts.iter().position(|&s| s == start)?;
-        cites[i].as_deref()
+        let i = self.passage(at)?;
+        Some(starts.get(i + 1).unwrap_or(&words.len()) - at)
+    }
+
+    /// Where the passage holding word `at` is from, if cited.
+    pub fn cite(&self, at: usize) -> Option<&str> {
+        let Source::Passages { cites, .. } = self else { return None };
+        cites[self.passage(at)?].as_deref()
     }
 
     /// `n` words; texts and passages continue from word `from`, wrapping.
@@ -724,10 +741,35 @@ mod tests {
             (source.passage_len(0), source.passage_len(2)),
             (Some(2), Some(3))
         );
-        assert_eq!(source.passage_len(1), None);
+        assert_eq!(source.passage_len(1), Some(1), "the rest of its passage");
+        assert_eq!(
+            (source.passage_len(4), source.passage_len(5)),
+            (Some(1), None)
+        );
         assert_eq!((source.cite(0), source.cite(2)), (None, Some("Z")));
-        assert_eq!(source.cite(1), None);
+        assert_eq!((source.cite(1), source.cite(4)), (None, Some("Z")));
+        assert_eq!(source.cite(5), None);
         assert_eq!(source.take(2, 4, &mut rng), owned(&["c", "d", "e", "a"]));
+    }
+
+    #[test]
+    fn tests_start_on_the_first_passage_of_a_work() {
+        let source = Source::passages(vec![
+            cited(&["a"], "X"),
+            cited(&["b"], "X"),
+            uncited(&["c"]),
+            uncited(&["d"]),
+            cited(&["e"], "Y"),
+            cited(&["f"], "Y"),
+            cited(&["g"], "X"),
+        ]);
+        let mut rng = Rng::with_seed(2);
+        let starts: BTreeSet<usize> =
+            (0..200).map(|_| source.start(&mut rng)).collect();
+        assert_eq!(starts, BTreeSet::from([0, 2, 3, 4, 6]));
+        assert!(source.ordered() && Source::Text(owned(&["a"])).ordered());
+        assert!(!Source::Random(owned(&["a"])).ordered());
+        assert_eq!(Source::passages(vec![]).start(&mut rng), 0);
     }
 
     #[test]

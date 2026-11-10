@@ -39,8 +39,9 @@ Flags:
     FILE              Type this text in order instead of random words.
     -l, --language    english (default), french, russian; for text mode,
                       also any language you keep texts for.
-    -m, --mode        words (default); text: a random passage of real prose
-                      -- the classics, your texts and external ones;
+    -m, --mode        words (default); text: a passage of real prose, the
+                      first of a work picked at random from the classics,
+                      your texts and external ones;
                       text:classics (or t:c): the bundled classics only;
                       text:external (or t:e): the external texts only;
                       funny (or funnywords): words that follow each other
@@ -91,10 +92,13 @@ While typing:
 On the results screen, tab flips the heatmap between errors and speed, o
 shows the text you typed -- hits green, misses red, the rest dimmed, with
 its citation; up/down scroll it and o goes back -- r starts a new test, p
-starts a drill and q quits. A drill draws words in proportion to how many of
-your weakest bigrams they contain -- the three most missed and the three
-slowest over your last 20 tests of that language -- and keeps drilling on
-tab until you press r.
+starts a drill and q quits. For a text or a file, c continues it: the next
+test starts where this one stopped, so a text can be read through passage
+by passage. A new text test starts a work from its first passage.
+
+A drill draws words in proportion to how many of your weakest bigrams they
+contain -- the three most missed and the three slowest over your last 20
+tests of that language -- and keeps drilling on tab until you press r.
 
 -------------------------------------------------------------------------------
 PRACTICE

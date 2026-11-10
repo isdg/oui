@@ -211,6 +211,9 @@ struct Feed {
     /// it has taken from there.
     start: usize,
     drawn: usize,
+    /// The word the last test of an ordered source stopped before, where
+    /// `c` goes on from; drills leave it be.
+    resume: Option<usize>,
     rng: Rng,
 }
 
@@ -279,6 +282,7 @@ impl App {
                 decorator: Decorator::new(&extras),
                 start: 0,
                 drawn: 0,
+                resume: None,
                 rng: Rng::new(),
             },
             limit,
@@ -296,9 +300,15 @@ impl App {
     }
 
     fn restart(&mut self) {
+        let start = self.feed.source.start(&mut self.feed.rng);
+        self.begin(start);
+    }
+
+    /// Starts a test at word `start` of the source, wrapping past its end.
+    fn begin(&mut self, start: usize) {
         self.feed.drawn = 0;
         self.feed.decorator.reset();
-        self.feed.start = self.feed.source.start(&mut self.feed.rng);
+        self.feed.start = start % self.feed.source.words().len().max(1);
         let session = match self.limit {
             Limit::Words(n) => Session::new(self.feed.take(n), None),
             Limit::Passage => {
@@ -330,6 +340,9 @@ impl App {
             session.extend(self.feed.take(BATCH));
         }
         if session.finished() {
+            if self.feed.drill.is_empty() && self.feed.source.ordered() {
+                self.feed.resume = Some(self.feed.start + session.current());
+            }
             let cite = self.feed.cite().map(str::to_owned);
             let meta = Meta { cite, ..self.meta.clone() };
             let store = self.store.as_ref().filter(|_| !self.incognito);
@@ -402,6 +415,12 @@ impl App {
                         self.feed.drill.clear();
                         self.restart();
                     }
+                    KeyCode::Char('c') => {
+                        if let Some(at) = self.feed.resume {
+                            self.feed.drill.clear();
+                            self.begin(at);
+                        }
+                    }
                     KeyCode::Char('p') => {
                         let recent = stats::combine(&self.recent);
                         self.feed.drill = recent.weak_bigrams(DRILL);
@@ -429,12 +448,13 @@ impl App {
             Screen::Results { report, measure, .. } => {
                 let notice = self.notice.as_deref();
                 let (layout, measure) = (self.layout, *measure);
+                let resume = self.feed.resume.is_some();
                 let title = match cite {
                     Some(cite) => format!("{title} · {cite}"),
                     None => title,
                 };
                 ui::results::draw(
-                    frame, report, layout, measure, &title, notice,
+                    frame, report, layout, measure, &title, notice, resume,
                 )
             }
         }
@@ -1444,6 +1464,74 @@ mod tests {
         app.feed.drill = vec![('a', 'b')];
         assert_eq!(app.feed.cite(), None);
         assert_eq!(self::app("ab", Limit::Words(1)).feed.cite(), None);
+    }
+
+    #[test]
+    fn c_continues_the_text_where_the_last_test_stopped() {
+        let passage = |text: &str, cite: &str| words::Passage {
+            words: words::split(text),
+            cite: Some(cite.into()),
+        };
+        let source = Source::passages(vec![
+            passage("ab cd", "X"),
+            passage("ef gh ij", "X"),
+            passage("kl", "Y"),
+        ]);
+        let mut app = App::new(test_setup(source, Limit::Passage), None);
+        let typing = |app: &App| {
+            let Screen::Typing(session) = &app.screen else { unreachable!() };
+            session.words().to_vec()
+        };
+        let type_out = |app: &mut App, keys: &str| {
+            for c in keys.chars() {
+                press(app, KeyCode::Char(c));
+            }
+        };
+        app.begin(0);
+        type_out(&mut app, "ab cd");
+        assert!(matches!(app.screen, Screen::Results { .. }));
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(typing(&app), ["ef", "gh", "ij"], "the next passage");
+        assert_eq!(app.feed.cite(), Some("X"));
+
+        type_out(&mut app, "ef ");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(typing(&app), ["gh", "ij"], "the rest of a stopped one");
+        assert_eq!(app.feed.cite(), Some("X"));
+
+        type_out(&mut app, "gh ij");
+        app.feed.drill = vec![('a', 'b')];
+        app.restart();
+        type_out(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.feed.drill.is_empty(), "a drill is left behind");
+        assert_eq!(typing(&app), ["kl"]);
+        assert_eq!(app.feed.cite(), Some("Y"));
+        type_out(&mut app, "kl");
+        press(&mut app, KeyCode::Char('c'));
+        assert_eq!(typing(&app), ["ab", "cd"], "wrapping to the first");
+    }
+
+    #[test]
+    fn c_goes_on_in_a_file_and_does_nothing_for_random_words() {
+        let mut app = app("ab cd ef", Limit::Words(2));
+        for c in "ab cd".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Char('c'));
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words(), ["ef", "ab"]);
+
+        let random = Source::Random(words::split("ab"));
+        let mut app = App::new(test_setup(random, Limit::Words(1)), None);
+        for c in "ab".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Char('c'));
+        assert!(matches!(app.screen, Screen::Results { .. }));
+        assert_eq!(app.feed.resume, None);
     }
 
     #[test]

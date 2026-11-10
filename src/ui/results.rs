@@ -24,6 +24,7 @@ pub fn draw(
     measure: Measure,
     title: &str,
     notice: Option<&str>,
+    resume: bool,
 ) {
     use Constraint::{Fill, Length};
 
@@ -62,8 +63,11 @@ pub fn draw(
     ] {
         frame.render_widget(Paragraph::new(lines(ranking)), area);
     }
-    let keys = " r new test · p drill weak bigrams · tab errors/speed · \
-                o text · q quit";
+    let go_on = if resume { "c continue · " } else { "" };
+    let keys = format!(
+        " r new test · {go_on}p drill weak bigrams · tab errors/speed · \
+         o text · q quit"
+    );
     frame.render_widget(Line::from(keys).dim(), footer);
     if let Some(notice) = notice {
         let notice = Line::from(format!("{notice} ")).red().right_aligned();
@@ -248,10 +252,16 @@ mod tests {
 
     #[test]
     fn screen_shows_every_section() {
-        let rows = render(100, 30, |f| {
-            draw(f, &report(), Layout::Qwerty, Measure::Speed, "english", None)
-        });
-        let screen = rows.join("\n");
+        let draw = |resume| {
+            let (layout, measure) = (Layout::Qwerty, Measure::Speed);
+            let rows = render(100, 30, |f| {
+                draw(f, &report(), layout, measure, "english", None, resume)
+            });
+            rows.join("\n")
+        };
+        assert!(draw(true).contains("r new test · c continue · p drill"));
+        let screen = draw(false);
+        assert!(!screen.contains("continue"), "{screen}");
         for needle in [
             "oui · english",
             "WPM          : 64",

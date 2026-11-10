@@ -220,7 +220,9 @@ and the reader says which.
   to trust.
 
 Records go to `reads.jsonl`, apart from the typing history, whose readers
-expect keystrokes.
+expect keystrokes. `oui stats` ends with them: answers pooled over
+all tests, then per text and kind of text the median rates of the tests
+that count.
 
 ## Code layout
 

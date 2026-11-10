@@ -14,6 +14,7 @@ use crate::history::{Meta, Record};
 use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
 use crate::practice::Target;
+use crate::reads::{ReadRecord, PASS};
 use crate::stats::{self, Report, Rhythm, Tally, CHARS_PER_WORD};
 use crate::ui::{results, show};
 
@@ -435,6 +436,92 @@ fn period_table(groups: &[(String, Vec<&Record>)], period: Period) -> String {
     out
 }
 
+/// The reading tests: how well they were taken in, then the speed of
+/// those that count, per text and kind of text; nothing without tests.
+pub fn reading(records: &[ReadRecord]) -> String {
+    if records.is_empty() {
+        return String::new();
+    }
+    let add = |(a, b): (usize, usize), (c, d)| (a + c, b + d);
+    let sum = |of: fn(&ReadRecord) -> (usize, usize)| {
+        records.iter().map(of).fold((0, 0), add)
+    };
+    let (right, asked) = sum(ReadRecord::right);
+    let (hits, old) = sum(ReadRecord::hits);
+    let (alarms, new) = sum(ReadRecord::false_alarms);
+    let counting = records.iter().filter(|r| r.counts()).count();
+    let ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
+
+    let mut out = String::new();
+    out.push_str("\n     ── Reading ─────────────────────────\n");
+    let _ = writeln!(
+        out,
+        "     Tests        : {}   ({counting} count, at {:.0}% right)",
+        records.len(),
+        PASS * 100.0
+    );
+    let time = hms(Duration::from_millis(ms));
+    let _ = writeln!(out, "     Time reading : {time}");
+    let _ = writeln!(
+        out,
+        "     Recognised   : {}  ({right}/{asked}) · hits {hits}/{old} · \
+         false alarms {alarms}/{new}",
+        percent(right, asked)
+    );
+    out.push_str(
+        "\n     Text                      Tests  Count   WPM  Words/min  \
+         Recognised\n",
+    );
+    let mut texts: Vec<(String, Vec<&ReadRecord>)> = Vec::new();
+    for record in records {
+        let kind = match (record.pace, record.continuous) {
+            (Some(_), _) => "paced",
+            (None, true) => "running",
+            (None, false) => "excerpts",
+        };
+        let text = format!("{} · {kind}", record.source);
+        match texts.iter_mut().find(|(name, _)| *name == text) {
+            Some((_, of)) => of.push(record),
+            None => texts.push((text, vec![record])),
+        }
+    }
+    for (text, of) in texts {
+        let counting = || of.iter().filter(|r| r.counts());
+        let rate = |rate: fn(&ReadRecord) -> f64| {
+            let rates: Vec<f64> = counting().map(|r| rate(r)).collect();
+            median(rates).map_or("—".to_string(), |r| format!("{r:.0}"))
+        };
+        let (wpm, words) = (rate(|r| r.wpm), rate(ReadRecord::words_a_minute));
+        let (right, asked) = of.iter().map(|r| r.right()).fold((0, 0), add);
+        let _ = writeln!(
+            out,
+            "     {text:<24}  {:>5}  {:>5}  {wpm:>4}  {words:>9}  {:>10}",
+            of.len(),
+            counting().count(),
+            percent(right, asked)
+        );
+    }
+    out
+}
+
+fn percent(part: usize, whole: usize) -> String {
+    match whole {
+        0 => "—".to_string(),
+        whole => format!("{:.0}%", 100.0 * part as f64 / whole as f64),
+    }
+}
+
+/// The middle value, or the mean of the middle two.
+fn median(mut values: Vec<f64>) -> Option<f64> {
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    match values.len() % 2 {
+        _ if values.is_empty() => None,
+        0 => Some((values[mid - 1] + values[mid]) / 2.0),
+        _ => Some(values[mid]),
+    }
+}
+
 fn completed<'a>(records: &'a [&Record]) -> impl Iterator<Item = f64> + 'a {
     records.iter().filter(|r| r.completed).map(|r| r.wpm)
 }
@@ -637,6 +724,55 @@ mod tests {
             out.rsplit("\n\n").next().unwrap().lines().collect();
         assert!(lines.iter().all(|l| l.chars().count() <= WORDS_WIDTH));
         assert_eq!(lines.join(" ").split_whitespace().count(), 30);
+    }
+
+    #[test]
+    fn reading_pools_the_answers_and_rates_the_tests_that_count() {
+        use crate::reads::Asked;
+
+        // Even probes were read; all are answered right up to `right`.
+        let read = |source: &str, continuous, wpm, right: usize| {
+            let asked = |i: usize| {
+                let old = i.is_multiple_of(2);
+                Asked(String::new(), old, old == (i < right), 0)
+            };
+            ReadRecord {
+                source: source.to_string(),
+                continuous,
+                wpm,
+                words: 400,
+                elapsed_ms: 120_000,
+                probes: (0..10).map(asked).collect(),
+                ..crate::reads::tests::record("t")
+            }
+        };
+        let records = [
+            read("book.txt", true, 300.0, 10),
+            read("book.txt", true, 200.0, 8),
+            read("book.txt", true, 900.0, 4),
+            read("english", false, 250.0, 9),
+        ];
+        let out = reading(&records);
+        assert!(out.contains("Tests        : 4   (3 count, at 80% right)"));
+        assert!(out.contains("Time reading : 0:08:00"), "{out}");
+        assert!(out.contains("Recognised   : 78%  (31/40)"), "{out}");
+        assert!(out.contains("hits 16/20 · false alarms 5/20"), "{out}");
+        let row = |text: &str| {
+            let row = out.lines().find(|l| l.contains(text)).unwrap();
+            row.split_whitespace().skip(3).collect::<Vec<_>>().join(" ")
+        };
+        assert_eq!(row("book.txt · running"), "3 2 250 200 73%", "{out}");
+        assert_eq!(row("english · excerpts"), "1 1 250 200 90%", "{out}");
+        assert_eq!(reading(&[]), "");
+        let none = reading(&records[2..3]);
+        assert!(none.contains("1      0     —          —"), "{none}");
+    }
+
+    #[test]
+    fn the_median_is_the_middle_or_the_mean_of_the_middle_two() {
+        assert_eq!(median(vec![3.0, 1.0, 2.0]), Some(2.0));
+        assert_eq!(median(vec![4.0, 1.0, 2.0, 3.0]), Some(2.5));
+        assert_eq!(median(vec![]), None);
     }
 
     fn detailed() -> View {

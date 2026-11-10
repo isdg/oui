@@ -23,6 +23,7 @@ use oui::history::{Meta, Record, Store};
 use oui::keyboard::{Layout, Measure};
 use oui::ngrams::Ngrams;
 use oui::practice::{self, Target};
+use oui::reads::ReadRecord;
 use oui::session::{Input, Session};
 use oui::stats::Report;
 use oui::summary::{self, Period, View};
@@ -686,8 +687,15 @@ fn stats(
         );
     }
     let records = select(history.records, last, source);
+    let reads = reads(store.load_reads()?.records, last, source);
     if records.is_empty() {
-        println!("no tests recorded in {}", store.history().display());
+        match reads.is_empty() {
+            true => {
+                let history = store.history();
+                println!("no tests recorded in {}", history.display());
+            }
+            false => print!("{}", summary::reading(&reads)),
+        }
         return Ok(());
     }
     view.layout = layout.unwrap_or_else(|| {
@@ -697,7 +705,21 @@ fn stats(
     });
     view.colour = std::io::stdout().is_terminal();
     print!("{}", summary::render(&records, &view));
+    print!("{}", summary::reading(&reads));
     Ok(())
+}
+
+/// The reading tests of `source` (all if `None`), the last `last` of them.
+fn reads(
+    mut records: Vec<ReadRecord>,
+    last: Option<NonZeroUsize>,
+    source: Option<&str>,
+) -> Vec<ReadRecord> {
+    records.retain(|r| source.is_none_or(|s| r.source == s));
+    if let Some(n) = last {
+        records.drain(..records.len().saturating_sub(n.get()));
+    }
+    records
 }
 
 /// The records of `source` (all if `None`), the last `last` of them.

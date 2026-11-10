@@ -179,6 +179,11 @@ read, one never typed nor read before; excerpts do not read as a story
 does, so these tests are marked and kept apart from the others. Tests go
 to ~/.oui/reads.jsonl: the time on each page and every answer.
 
+oui stats ends with these tests: how many count, the sentences told right
+over all of them with hits and false alarms, then per text the median WPM
+and words a minute of the tests that count -- running prose and excerpts
+on rows of their own. -n and -s select them as they do typing tests.
+
 -------------------------------------------------------------------------------
 HISTORY AND STATS
 -------------------------------------------------------------------------------

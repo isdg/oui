@@ -4,7 +4,7 @@ OUI
 A terminal typing test that tells you where you are slow, not just how fast
 you are. Alongside ttyper's WPM, accuracy and worst keys, oui shows the
 two-key combinations you fumble, the bigrams that cost you the most time,
-and a keyboard heatmap of both -- and keeps every test, so the drill and
+and a keyboard heatmap of both -- and keeps every test, so practice and
 oui stats work from your history, not one run.
 
 Named after the word its author finds hardest to type.
@@ -93,7 +93,7 @@ While typing:
 On the results screen, tab flips the heatmap between errors and speed, o
 shows the text you typed -- hits green, misses red, the rest dimmed, with
 its citation; up/down scroll it and o goes back -- r starts a new test, p
-starts a drill, i takes the test just typed out of the history -- and i
+starts practice, i takes the test just typed out of the history -- and i
 again puts it back -- and q quits. For a text or a file, c continues it:
 the next test starts where this one stopped, so a text can be read through
 passage by passage. A new text test starts a work from its first passage.
@@ -102,11 +102,10 @@ O opens that work to read: its passages in order, the ones behind your
 place dimmed, with up/down to scroll. The passage at the top is marked, and
 enter starts typing from it; O or esc goes back to the results.
 
-A drill draws words in proportion to how many of your weakest bigrams they
-contain -- the three most missed and the three slowest over your last 20
-tests of that language -- and keeps drilling on tab until you press r.
-Drills are recorded as drills: oui stats plots them as a kind of their own,
-whatever mode they began in.
+p practises as oui -p does, in the language and with the -w or -t you
+started with: see PRACTICE. Its tests are recorded as practice, and tab and
+p keep practising until r goes back to the test you came for; c and O still
+know your place in the text.
 
 -------------------------------------------------------------------------------
 PRACTICE
@@ -121,7 +120,7 @@ per keystroke are the pool a test draws from at random, honouring -w, -t and
 -W. No target leads more than a fifth of the pool while others still have
 words, and the title names the three costliest. Practice tests are recorded
 like any other, so the pool follows your typing as it improves. p on the
-results drills as usual. Ngrams tests are left out: n-grams typed apart set
+results of any test starts the same practice. Ngrams tests are left out: n-grams typed apart set
 a pace of their own, with spaces where the language never has them.
 oui stats -p lists each language's targets -- pairs, misses, mean gap, time
 lost -- and the words they draw.
@@ -148,7 +147,7 @@ HISTORY AND STATS
 
 Every test that saw a keystroke is appended to ~/.oui/history.jsonl as it
 ends: a summary plus the raw keystrokes, so any statistic can be recomputed
-later; -i runs tests that are not recorded, though drills still draw on
+later; -i runs tests that are not recorded, though practice still draws on
 what was. oui stats reads it back:
 
     > oui stats                     # all tests: stats, WPM per test, texts
@@ -263,7 +262,7 @@ FILES
     src/geometry.rs     finger, hand and row per key; tallies over them
     src/fingering.rs    the fingers your timing implies
     src/config.rs       ~/.ouirc
-    src/words.rs        word lists, passages, texts, drills
+    src/words.rs        word lists, passages, texts
     src/external.rs     oui external: passages from a markdown archive
     src/practice.rs     the costliest bigrams and the words for -p
     src/chain.rs        the word chains behind --mode funny

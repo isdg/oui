@@ -48,7 +48,8 @@ pub struct Meta {
     /// Prose typed `--plain`: lowercase, bare of punctuation and numbers.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plain: bool,
-    /// A drill on weak bigrams, started from a test of this mode.
+    /// A drill on weak bigrams, as `p` ran before it started practice;
+    /// read from the records of then, never written.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drill: bool,
     pub layout: String,

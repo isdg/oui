@@ -529,11 +529,11 @@ fn dominant<'a>(modes: &[&'a str]) -> &'a str {
     best
 }
 
-/// The kind a recorded test is shown as: `drill` whatever mode it began
-/// in, `text` for passages of any texts, else its mode.
+/// The kind a recorded test is shown as: `text` for passages of any
+/// texts, `practice` for the drills that came before it, else its mode.
 fn shown(meta: &Meta) -> &str {
     if meta.drill {
-        return "drill";
+        return "practice";
     }
     match meta.mode.as_str() {
         // What `text:classics` and `text:external` were recorded as before.
@@ -550,7 +550,6 @@ fn mode_colour(mode: &str) -> u8 {
         "text" => 101,
         "funny" => 138,
         "practice" => 103,
-        "drill" => 131,
         "file" => 65,
         m if m.starts_with("ngrams:") => 144,
         _ => 243,
@@ -736,7 +735,7 @@ mod tests {
         for mode in ["words", "ngrams:2"] {
             assert_eq!(shown(&meta(mode)), mode);
             let drill = Meta { drill: true, ..meta(mode) };
-            assert_eq!(shown(&drill), "drill");
+            assert_eq!(shown(&drill), "practice");
         }
     }
 

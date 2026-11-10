@@ -5,7 +5,7 @@
 ttyper only half answers: **where should I improve?** ttyper reports WPM,
 accuracy and a list of worst keys; `oui` keeps all of that and adds a keyboard
 heatmap, the two-key combinations you mistype, the bigrams that cost you the
-most time, and a drill that feeds those weak spots back to you.
+most time, and practice that feeds those weak spots back to you.
 
 ## Goals
 
@@ -83,8 +83,8 @@ Three bands, top to bottom, under a one-line header:
 ```
 
 - `tab` flips the heatmap between **errors** (miss rate) and **speed** (mean
-  latency); `r` starts a new test, `p` a drill of your weak bigrams, `q`
-  quits.
+  latency); `r` starts a new test, `p` practice of your costliest
+  bigrams, `q` quits.
 - The plot is a port of `plc`'s `line_chart`: one column per sample, `●`
   start, `─ │ ╭ ╮ ╰ ╯` joins, a right-aligned label on every row, `┼ ┤ └`
   axis, eight rows tall. Samples are resampled to the available width.
@@ -111,7 +111,7 @@ pub struct Keystroke {
 
 `expected` and `prev` are taken from the **target** text, so the bigram a
 keystroke belongs to is the one the typist was supposed to produce, which is
-what a drill must target. Backspace is not logged; it only breaks the chain.
+what practice must target. Backspace is not logged; it only breaks the chain.
 
 ### Statistics
 
@@ -161,15 +161,8 @@ holds `dit` and `il` but no `t-i`. Counting running prose rather than the
 word list weighs each n-gram by how often it is typed. Each word of the
 test is one n-gram drawn by count: N=1 types single letters as often as
 the language does, N=2 its bigrams. Tests record their mode as
-`ngrams:N`; practice and the `p` drill of a words test leave them out,
-as n-grams typed apart set a pace of their own and their spaces fall
+`ngrams:N`; practice leaves them out, as n-grams typed apart set a pace of their own and their spaces fall
 where the language's never do.
-
-### Drill
-
-`p` scores every word in the pool by how many weak bigrams it contains — word
-boundaries count, so `␣q` and `e␣` can be drilled — and samples words in
-proportion to that score.
 
 ### Practice
 
@@ -187,12 +180,18 @@ of the pool while words led by others remain, so one slow start such as
 `␣ж` cannot fill it. The title names the three costliest targets and
 `oui stats -p` prints them all with the pool.
 
+`p` on the results sets the same practice up from what the app was launched
+with, the mode aside, and sets the run aside: `r` returns to it, and `c`
+and the reader still go on in its text. It replaced a drill that sampled
+the run's own words by their weak bigrams over the last 20 tests; records
+of those carry `drill` and are shown as practice.
+
 ## Code layout
 
 ```
 src/
   lib.rs       module list
-  words.rs     bundled lists, text sources, sampling, drills
+  words.rs     bundled lists, text sources, sampling
   practice.rs  costliest bigrams and the words richest in them, for -p
   chain.rs     word chains over prose for --mode funny
   ngrams.rs    letter n-grams of prose as words for --mode ngrams
@@ -227,8 +226,7 @@ random words, or the whole text for a file; `-t` switches to a timed test.
   optional field, so older readers and records are unaffected.
 - `oui stats` combines the records: a `plc stat`-style block, WPM per test
   and the recent texts; `--detailed` adds both heatmaps over every
-  keystroke and the rankings. Drills rank weak bigrams over the last 20
-  tests of the same language.
+  keystroke and the rankings.
 - `--geometry` adds the key and bigram tallies summed per finger, row and
   hand move. Fingers follow touch typing on the ANSI board, keyed by
   physical position, so every layout shares them. The fingering the

@@ -83,7 +83,7 @@ pub fn draw(
     };
     let read = if offered.read { "O read · " } else { "" };
     let keys = format!(
-        " r new test · {go_on}p drill · tab errors/speed · o text · \
+        " r new test · {go_on}p practice · tab errors/speed · o text · \
          {read}{incognito}q quit"
     );
     frame.render_widget(Line::from(keys).dim(), footer);
@@ -279,7 +279,7 @@ mod tests {
         };
         let all =
             draw(Keys { resume: true, incognito: Some(true), read: true });
-        assert!(all.contains("r new test · c continue · p drill"), "{all}");
+        assert!(all.contains("r new test · c continue · p practice"));
         assert!(all.contains("o text · O read · i incognito · q quit"));
         let out = draw(Keys { incognito: Some(false), ..Keys::default() });
         assert!(out.contains("o text · i record · q quit"), "{out}");

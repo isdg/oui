@@ -24,7 +24,7 @@ use oui::keyboard::{Layout, Measure};
 use oui::ngrams::Ngrams;
 use oui::practice::{self, Target};
 use oui::session::{Input, Session};
-use oui::stats::{self, Report};
+use oui::stats::Report;
 use oui::summary::{self, Period, View};
 use oui::ui;
 use oui::ui::reader::{Reading, Scroll};
@@ -38,10 +38,6 @@ const DEFAULT_WORDS: usize = 50;
 const BATCH: usize = 100;
 /// Redraw interval, which keeps the clock of a timed test moving.
 const FRAME: Duration = Duration::from_millis(100);
-/// Bigrams a drill takes from each of the error and slowness rankings.
-const DRILL: usize = 3;
-/// Tests of the same source a drill looks back over, this one included.
-const RECENT: usize = 20;
 /// Words a practice test draws from, the richest in costly bigrams.
 const PRACTICE: usize = 150;
 /// Targets a practice test names in its title, costliest first.
@@ -204,29 +200,23 @@ enum Screen {
     },
 }
 
-/// Where a session's words come from: the source, or a drill over it.
+/// Where a session's words come from.
 struct Feed {
     source: Source,
-    /// Bigrams being drilled; empty for a normal test.
-    drill: Vec<(char, char)>,
-    /// The `--with` extras; drills are left plain so they hit their bigrams.
+    /// The `--with` extras.
     decorator: Decorator,
     /// Where the current session starts in the source, and how many words
     /// it has taken from there.
     start: usize,
     drawn: usize,
     /// The word the last test of an ordered source stopped before, where
-    /// `c` goes on from; drills leave it be.
+    /// `c` goes on from.
     resume: Option<usize>,
     rng: Rng,
 }
 
 impl Feed {
     fn take(&mut self, n: usize) -> Vec<String> {
-        if !self.drill.is_empty() {
-            let pool = self.source.words();
-            return words::practice(pool, &self.drill, n, &mut self.rng);
-        }
         let from = self.start + self.drawn;
         let words = self.source.take(from, n, &mut self.rng);
         self.drawn += words.len();
@@ -260,11 +250,8 @@ impl Feed {
         Scroll { passage, row: 0 }
     }
 
-    /// Where the passage a test started on is from; drills cite nothing.
+    /// Where the passage a test started on is from.
     fn cite(&self) -> Option<&str> {
-        if !self.drill.is_empty() {
-            return None;
-        }
         self.source.cite(self.start)
     }
 }
@@ -278,15 +265,43 @@ struct Setup {
     meta: Meta,
     extras: Vec<Extra>,
     incognito: bool,
+    /// What it was resolved from, which `p` sets practice up from.
+    args: TestArgs,
 }
 
-struct App {
+/// What the tests of a run type, and how they are named and recorded.
+struct Run {
     feed: Feed,
     limit: Limit,
     layout: Layout,
     title: String,
     meta: Meta,
-    /// The history drills draw on; `None` reads nothing.
+}
+
+impl Run {
+    fn new(setup: Setup) -> Self {
+        let Setup { source, limit, layout, title, meta, extras, .. } = setup;
+        let feed = Feed {
+            source,
+            decorator: Decorator::new(&extras),
+            start: 0,
+            drawn: 0,
+            resume: None,
+            rng: Rng::new(),
+        };
+        Run { feed, limit, layout, title, meta }
+    }
+}
+
+struct App {
+    run: Run,
+    /// The run `p` set aside to practise; `r`, `c` and the reader go back
+    /// to it, and its place in the text is kept meanwhile.
+    parked: Option<Run>,
+    /// What the app was launched with, which `p` sets practice up from.
+    args: TestArgs,
+    /// The history tests are recorded in and practice draws on; `None`
+    /// records and practises nothing.
     store: Option<Store>,
     /// Finished tests are not recorded in the store.
     incognito: bool,
@@ -295,83 +310,82 @@ struct App {
     /// The record of the test on the results screen, and whether the
     /// history holds it: `i` takes it out and puts it back.
     record: Option<(Record, bool)>,
-    /// The last [`RECENT`] tests of this source, which drills draw on.
-    recent: Vec<Report>,
     screen: Screen,
 }
 
 impl App {
     fn new(setup: Setup, store: Option<Store>) -> Self {
-        let Setup { source, limit, layout, title, meta, extras, incognito } =
-            setup;
-        let (recent, notice) = match store.as_ref().map(|s| recent(s, &meta)) {
-            Some(Err(e)) => (Vec::new(), Some(format!("history: {e:#}"))),
-            Some(Ok(recent)) => (recent, None),
-            None => (Vec::new(), None),
-        };
+        let (incognito, args) = (setup.incognito, setup.args.clone());
         let mut app = App {
-            feed: Feed {
-                source,
-                drill: Vec::new(),
-                decorator: Decorator::new(&extras),
-                start: 0,
-                drawn: 0,
-                resume: None,
-                rng: Rng::new(),
-            },
-            limit,
-            layout,
-            title,
-            meta,
+            run: Run::new(setup),
+            parked: None,
+            args,
             store,
             incognito,
-            notice,
+            notice: None,
             record: None,
-            recent,
             screen: Screen::Typing(Session::new(Vec::new(), None)),
         };
         app.restart();
         app
     }
 
-    /// A new test: of another work, or the drill again, which keeps the
-    /// source's place.
+    /// A new test, of another work if the source has works.
     fn restart(&mut self) {
-        let start = match self.feed.drill.is_empty() {
-            true => self.feed.source.start(&mut self.feed.rng),
-            false => self.feed.start,
-        };
+        let feed = &mut self.run.feed;
+        let start = feed.source.start(&mut feed.rng);
         self.begin(start);
     }
 
     /// Starts a test at word `start` of the source, wrapping past its end.
     fn begin(&mut self, start: usize) {
-        self.record = None;
-        self.feed.drawn = 0;
-        self.feed.decorator.reset();
-        self.feed.start = start % self.feed.source.words().len().max(1);
-        let session = match self.limit {
-            Limit::Words(n) => Session::new(self.feed.take(n), None),
+        (self.record, self.notice) = (None, None);
+        let feed = &mut self.run.feed;
+        feed.drawn = 0;
+        feed.decorator.reset();
+        feed.start = start % feed.source.words().len().max(1);
+        let session = match self.run.limit {
+            Limit::Words(n) => Session::new(feed.take(n), None),
             Limit::Passage => {
-                let n = self.feed.source.passage_len(self.feed.start);
-                Session::new(self.feed.take(n.unwrap_or(DEFAULT_WORDS)), None)
+                let n = feed.source.passage_len(feed.start);
+                Session::new(feed.take(n.unwrap_or(DEFAULT_WORDS)), None)
             }
-            Limit::Time(limit) => {
-                Session::new(self.feed.take(BATCH), Some(limit))
-            }
+            Limit::Time(limit) => Session::new(feed.take(BATCH), Some(limit)),
         };
         self.screen = Screen::Typing(session);
     }
 
-    fn title(&self) -> String {
-        let mut title = self.title.clone();
-        if !self.feed.drill.is_empty() {
-            let show = |&(a, b): &(char, char)| {
-                format!("{}{}", ui::show(a), ui::show(b))
-            };
-            let drill: Vec<String> = self.feed.drill.iter().map(show).collect();
-            title = format!("{title} · drill {}", drill.join(" "));
+    /// Switches to practice as `oui --practice` runs it, for the language
+    /// and limits the app was launched with, setting the run aside.
+    fn practise(&mut self) {
+        let Some(store) = &self.store else { return };
+        let mode = Some(Mode::Practice);
+        let args = TestArgs { file: None, mode, ..self.args.clone() };
+        match setup(&args, store) {
+            Ok(setup) => {
+                let run = std::mem::replace(&mut self.run, Run::new(setup));
+                self.parked.get_or_insert(run);
+                self.restart();
+            }
+            Err(e) => self.notice = Some(format!("practice: {e:#}")),
         }
+    }
+
+    /// Back to the run practice set aside, if it did.
+    fn resume_run(&mut self) {
+        if let Some(run) = self.parked.take() {
+            self.run = run;
+        }
+    }
+
+    /// The run whose text `c` and the reader go on in: the one set aside
+    /// while practising.
+    fn text(&self) -> &Run {
+        self.parked.as_ref().unwrap_or(&self.run)
+    }
+
+    fn title(&self) -> String {
+        let mut title = self.run.title.clone();
         if matches!(self.record, Some((_, false))) {
             title.push_str(" · incognito");
         }
@@ -381,17 +395,17 @@ impl App {
     /// Advances the clock; returns to results once the session is over.
     fn tick(&mut self, now: Instant) {
         let Screen::Typing(session) = &mut self.screen else { return };
+        let feed = &mut self.run.feed;
         session.tick(now);
         if session.limit().is_some() && session.remaining() < BATCH / 2 {
-            session.extend(self.feed.take(BATCH));
+            session.extend(feed.take(BATCH));
         }
         if session.finished() {
-            if self.feed.drill.is_empty() && self.feed.source.ordered() {
-                self.feed.resume = Some(self.feed.start + session.current());
+            if feed.source.ordered() {
+                feed.resume = Some(feed.start + session.current());
             }
-            let cite = self.feed.cite().map(str::to_owned);
-            let drill = !self.feed.drill.is_empty();
-            let meta = Meta { cite, drill, ..self.meta.clone() };
+            let cite = feed.cite().map(str::to_owned);
+            let meta = Meta { cite, ..self.run.meta.clone() };
             let store = self.store.as_ref().filter(|_| !self.incognito);
             let saved = save(store, session, now, &meta);
             (self.record, self.notice) = match saved {
@@ -399,11 +413,6 @@ impl App {
                 Err(e) => (None, Some(format!("not saved: {e:#}"))),
             };
             let report = Report::new(session, session.elapsed(now));
-            if !session.log().is_empty() {
-                self.recent.push(report.clone());
-                let excess = self.recent.len().saturating_sub(RECENT);
-                self.recent.drain(..excess);
-            }
             self.screen = Screen::Results {
                 report: Box::new(report),
                 measure: Measure::default(),
@@ -478,15 +487,18 @@ impl App {
                 KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.down(),
                 KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.up(),
                 KeyCode::Enter => {
-                    let work = self.feed.source.work(self.feed.start);
-                    if let Some(passage) = work.get(scroll.passage) {
-                        self.feed.drill.clear();
+                    let passage = scroll.passage;
+                    let feed = &self.text().feed;
+                    let work = feed.source.work(feed.start);
+                    if let Some(passage) = work.get(passage) {
+                        self.resume_run();
                         self.begin(passage.start);
                     }
                 }
                 _ => {}
             },
             Screen::Results { measure, session, review, reader, .. } => {
+                let text = self.parked.as_ref().unwrap_or(&self.run);
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return false,
                     KeyCode::Char('i') => self.toggle_recorded(),
@@ -494,8 +506,8 @@ impl App {
                         *review = if review.is_some() { None } else { Some(0) };
                     }
                     KeyCode::Char('O') => {
-                        let readable = !self.feed.reading().passages.is_empty();
-                        *reader = readable.then(|| self.feed.opening());
+                        let readable = !text.feed.reading().passages.is_empty();
+                        *reader = readable.then(|| text.feed.opening());
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if let Some(row) = review {
@@ -508,20 +520,16 @@ impl App {
                         }
                     }
                     KeyCode::Char('r') => {
-                        self.feed.drill.clear();
+                        self.resume_run();
                         self.restart();
                     }
                     KeyCode::Char('c') => {
-                        if let Some(at) = self.feed.resume {
-                            self.feed.drill.clear();
+                        if let Some(at) = text.feed.resume {
+                            self.resume_run();
                             self.begin(at);
                         }
                     }
-                    KeyCode::Char('p') => {
-                        let recent = stats::combine(&self.recent);
-                        self.feed.drill = recent.weak_bigrams(DRILL);
-                        self.restart();
-                    }
+                    KeyCode::Char('p') => self.practise(),
                     KeyCode::Tab => *measure = measure.toggle(),
                     _ => {}
                 }
@@ -533,26 +541,28 @@ impl App {
     /// Draws the screen; a scrolled text keeps the scroll it could show.
     fn draw(&mut self, frame: &mut Frame, now: Instant) {
         let title = self.title();
-        let cite = self.feed.cite();
+        let cite = self.run.feed.cite();
+        let text = self.parked.as_ref().unwrap_or(&self.run);
         match &mut self.screen {
             Screen::Typing(session) => {
                 ui::typing::draw(frame, session, now, &title, cite)
             }
             Screen::Results { reader: Some(scroll), .. } => {
-                let reading = self.feed.reading();
+                let (reading, cite) = (text.feed.reading(), text.feed.cite());
+                let title = &text.title;
                 *scroll =
-                    ui::reader::draw(frame, &reading, &title, cite, *scroll);
+                    ui::reader::draw(frame, &reading, title, cite, *scroll);
             }
             Screen::Results { session, review: Some(row), .. } => {
                 *row = ui::review::draw(frame, session, &title, cite, *row);
             }
             Screen::Results { report, measure, .. } => {
                 let notice = self.notice.as_deref();
-                let (layout, measure) = (self.layout, *measure);
+                let (layout, measure) = (self.run.layout, *measure);
                 let keys = Keys {
-                    resume: self.feed.resume.is_some(),
+                    resume: text.feed.resume.is_some(),
                     incognito: self.record.as_ref().map(|(_, kept)| *kept),
-                    read: !self.feed.reading().passages.is_empty(),
+                    read: !text.feed.reading().passages.is_empty(),
                 };
                 let title = match cite {
                     Some(cite) => format!("{title} · {cite}"),
@@ -564,18 +574,6 @@ impl App {
             }
         }
     }
-}
-
-/// Reports of the last [`RECENT`] recorded tests of the same source, ngrams
-/// tests only if this is one.
-fn recent(store: &Store, meta: &Meta) -> Result<Vec<Report>> {
-    let records = store.load()?.records;
-    let same = records.iter().filter(|r| {
-        r.meta.source == meta.source && of_ngrams(&r.meta) == of_ngrams(meta)
-    });
-    let mut reports: Vec<Report> = same.map(Record::report).collect();
-    reports.drain(..reports.len().saturating_sub(RECENT - 1));
-    Ok(reports)
 }
 
 /// Records a finished session, unless nothing was typed; the record made.
@@ -812,8 +810,8 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
         layout: layout.name().to_string(),
         cite: None,
     };
-    let incognito = cli.incognito;
-    Ok(Setup { source, limit, layout, title, meta, extras, incognito })
+    let (incognito, args) = (cli.incognito, cli.clone());
+    Ok(Setup { source, limit, layout, title, meta, extras, incognito, args })
 }
 
 fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
@@ -1028,6 +1026,7 @@ mod tests {
             meta: Meta::default(),
             extras: Vec::new(),
             incognito: false,
+            args: TestArgs::default(),
         }
     }
 
@@ -1186,10 +1185,13 @@ mod tests {
         assert_eq!(setup.meta.mode, "text");
         let app = App::new(setup, None);
         let Screen::Typing(session) = &app.screen else { unreachable!() };
-        let len = app.feed.source.passage_len(app.feed.start);
+        let len = app.run.feed.source.passage_len(app.run.feed.start);
         assert_eq!(Some(session.words().len()), len);
         assert!(session.words()[0].starts_with(char::is_uppercase));
-        assert!(app.feed.cite().is_some_and(|c| c.contains(", ")), "bundled");
+        assert!(
+            app.run.feed.cite().is_some_and(|c| c.contains(", ")),
+            "bundled"
+        );
     }
 
     #[test]
@@ -1208,9 +1210,9 @@ mod tests {
             assert!(setup.meta.plain && bare(&setup.source), "{mode}");
             let app = App::new(setup, None);
             let Screen::Typing(session) = &app.screen else { unreachable!() };
-            let len = app.feed.source.passage_len(app.feed.start);
+            let len = app.run.feed.source.passage_len(app.run.feed.start);
             assert_eq!(Some(session.words().len()), len);
-            assert!(app.feed.cite().is_some(), "still cited");
+            assert!(app.run.feed.cite().is_some(), "still cited");
         }
         let tmp = TempDir::new("plain");
         let store = Store::at(&tmp.0);
@@ -1503,11 +1505,12 @@ mod tests {
         }
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('p'));
-        assert!(!app.feed.drill.is_empty(), "drills still work");
+        assert!(matches!(app.screen, Screen::Typing(_)), "practice goes on");
+        assert_eq!(app.run.meta.mode, "practice");
     }
 
     #[test]
-    fn practice_and_drills_leave_ngrams_apart() {
+    fn practice_leaves_ngrams_tests_out() {
         let tmp = TempDir::new("ngrams");
         let store = slow_qu(&tmp);
         let as_ngrams = |record: Record| Record {
@@ -1520,10 +1523,7 @@ mod tests {
         let err = setup(&cli(&["-p"]), &store).err().unwrap().to_string();
         assert!(err.starts_with("no english tests to practise on"), "{err}");
         store.append(&records[0]).unwrap();
-        let ngrams = setup(&cli(&["-m", "n2"]), &store).unwrap().meta;
-        let words = setup(&cli(&[]), &store).unwrap().meta;
-        assert_eq!(recent(&store, &ngrams).unwrap().len(), 1);
-        assert_eq!(recent(&store, &words).unwrap().len(), 1);
+        assert!(setup(&cli(&["-p"]), &store).is_ok());
     }
 
     #[test]
@@ -1605,17 +1605,15 @@ mod tests {
     }
 
     #[test]
-    fn passages_are_cited_except_in_drills() {
+    fn passages_are_cited() {
         let passage = words::Passage {
             words: words::split("ab cd"),
             cite: Some("X, Y (1900)".into()),
         };
         let source = Source::passages(vec![passage]);
-        let mut app = App::new(test_setup(source, Limit::Passage), None);
-        assert_eq!(app.feed.cite(), Some("X, Y (1900)"));
-        app.feed.drill = vec![('a', 'b')];
-        assert_eq!(app.feed.cite(), None);
-        assert_eq!(self::app("ab", Limit::Words(1)).feed.cite(), None);
+        let app = App::new(test_setup(source, Limit::Passage), None);
+        assert_eq!(app.run.feed.cite(), Some("X, Y (1900)"));
+        assert_eq!(self::app("ab", Limit::Words(1)).run.feed.cite(), None);
     }
 
     #[test]
@@ -1629,7 +1627,9 @@ mod tests {
             passage("ef gh ij", "X"),
             passage("kl", "Y"),
         ]);
-        let mut app = App::new(test_setup(source, Limit::Passage), None);
+        let tmp = TempDir::new("continue");
+        let store = Some(slow_qu(&tmp));
+        let mut app = App::new(test_setup(source, Limit::Passage), store);
         let typing = |app: &App| {
             let Screen::Typing(session) = &app.screen else { unreachable!() };
             session.words().to_vec()
@@ -1644,23 +1644,23 @@ mod tests {
         assert!(matches!(app.screen, Screen::Results { .. }));
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(typing(&app), ["ef", "gh", "ij"], "the next passage");
-        assert_eq!(app.feed.cite(), Some("X"));
+        assert_eq!(app.run.feed.cite(), Some("X"));
 
         type_out(&mut app, "ef ");
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(typing(&app), ["gh", "ij"], "the rest of a stopped one");
-        assert_eq!(app.feed.cite(), Some("X"));
+        assert_eq!(app.run.feed.cite(), Some("X"));
 
         type_out(&mut app, "gh ij");
-        app.feed.drill = vec![('a', 'b')];
-        app.restart();
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(app.run.meta.mode, "practice");
         type_out(&mut app, "x");
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('c'));
-        assert!(app.feed.drill.is_empty(), "a drill is left behind");
+        assert!(app.parked.is_none(), "practice is left behind");
         assert_eq!(typing(&app), ["kl"]);
-        assert_eq!(app.feed.cite(), Some("Y"));
+        assert_eq!(app.run.feed.cite(), Some("Y"));
         type_out(&mut app, "kl");
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(typing(&app), ["ab", "cd"], "wrapping to the first");
@@ -1679,7 +1679,9 @@ mod tests {
             passage("kl", "X"),
             passage("mn", "Y"),
         ]);
-        let mut app = App::new(test_setup(source, Limit::Passage), None);
+        let tmp = TempDir::new("reader");
+        let store = Some(slow_qu(&tmp));
+        let mut app = App::new(test_setup(source, Limit::Passage), store);
         let type_out = |app: &mut App, keys: &str| {
             for c in keys.chars() {
                 press(app, KeyCode::Char(c));
@@ -1694,7 +1696,7 @@ mod tests {
         type_out(&mut app, "ab cd");
         press(&mut app, KeyCode::Char('O'));
         assert_eq!(reader(&app), at(1), "opens on the next passage");
-        let reading = app.feed.reading();
+        let reading = app.run.feed.reading();
         let texts: Vec<String> =
             reading.passages.iter().map(|p| p.join(" ")).collect();
         assert_eq!(texts, ["ab cd", "ef gh ij", "kl"], "the work cited X");
@@ -1722,15 +1724,18 @@ mod tests {
         type_out(&mut app, "ef gh ij");
         press(&mut app, KeyCode::Char('c'));
         type_out(&mut app, "kl");
-        assert_eq!(app.feed.reading().place, 3, "all of it is behind");
-        app.feed.drill = vec![('a', 'b')];
-        app.restart();
+        assert_eq!(app.run.feed.reading().place, 3, "all of it is behind");
+        press(&mut app, KeyCode::Char('p'));
         type_out(&mut app, "x");
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Char('O'));
-        assert_eq!(reader(&app), at(2), "a drill keeps the work, on kl");
-        press(&mut app, KeyCode::Char('O'));
-        assert_eq!(reader(&app), None);
+        assert_eq!(reader(&app), at(2), "practice keeps the work, on kl");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.parked.is_none(), "back in the text");
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words(), ["kl"]);
     }
 
     #[test]
@@ -1739,7 +1744,7 @@ mod tests {
         for c in "ab cd".chars() {
             press(&mut app, KeyCode::Char(c));
         }
-        let reading = app.feed.reading();
+        let reading = app.run.feed.reading();
         assert_eq!(reading.passages, [["ab", "cd", "ef"]]);
         assert_eq!(reading.place, 0, "typing stopped inside it");
 
@@ -1772,34 +1777,7 @@ mod tests {
         }
         press(&mut app, KeyCode::Char('c'));
         assert!(matches!(app.screen, Screen::Results { .. }));
-        assert_eq!(app.feed.resume, None);
-    }
-
-    #[test]
-    fn drill_feeds_back_the_weak_bigrams_until_a_new_test() {
-        let mut app = app("ab cd", Limit::Words(2));
-        for code in [
-            KeyCode::Char('a'),
-            KeyCode::Char('x'),
-            KeyCode::Backspace,
-            KeyCode::Char('b'),
-            KeyCode::Char(' '),
-            KeyCode::Char('c'),
-            KeyCode::Char('d'),
-        ] {
-            press(&mut app, code);
-        }
-        press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.feed.drill, [('a', 'b')]);
-        assert_eq!(app.title(), "t · drill ab");
-        let Screen::Typing(session) = &app.screen else { unreachable!() };
-        assert_eq!(session.words(), ["ab", "ab"]);
-        for c in "ab ab".chars() {
-            press(&mut app, KeyCode::Char(c));
-        }
-        press(&mut app, KeyCode::Char('r'));
-        assert!(app.feed.drill.is_empty());
-        assert_eq!(app.title(), "t");
+        assert_eq!(app.run.feed.resume, None);
     }
 
     #[test]
@@ -1821,30 +1799,61 @@ mod tests {
         assert_eq!(completed, [true, false]);
         assert!(records.iter().all(|r| r.meta.cite.is_none()));
         assert!(app.notice.is_none());
-
-        app.feed.drill = vec![('a', 'b')];
-        app.restart();
-        press(&mut app, KeyCode::Char('a'));
-        press(&mut app, KeyCode::Esc);
-        let records = store.load().unwrap().records;
-        let drills: Vec<bool> = records.iter().map(|r| r.meta.drill).collect();
-        assert_eq!(drills, [false, false, true], "a drill is recorded as one");
-        assert_eq!(records[2].meta.mode, records[0].meta.mode);
     }
 
     #[test]
-    fn incognito_records_nothing_but_still_drills_on_history() {
+    fn p_practises_as_practice_mode_does_until_r() {
+        let tmp = TempDir::new("p");
+        let store = slow_qu(&tmp);
+        let mut app = app("ab cd", Limit::Words(1));
+        let type_out = |app: &mut App, keys: &str| {
+            for c in keys.chars() {
+                press(app, KeyCode::Char(c));
+            }
+        };
+        type_out(&mut app, "ab");
+        press(&mut app, KeyCode::Char('p'));
+        assert!(matches!(app.screen, Screen::Results { .. }), "no history");
+        app.store = Some(Store::at(tmp.0.join("empty")));
+        press(&mut app, KeyCode::Char('p'));
+        let notice = app.notice.clone().unwrap_or_default();
+        assert!(notice.starts_with("practice: no english tests"), "{notice}");
+
+        app.store = Some(store.clone());
+        press(&mut app, KeyCode::Char('p'));
+        let practice = setup(&cli(&["-p"]), &store).unwrap();
+        assert_eq!(app.title(), practice.title, "as `oui -p` names it");
+        assert_eq!(app.title(), "english practice · qu · 50 words");
+        assert!(app.notice.is_none());
+        let words = |app: &App| {
+            let Screen::Typing(session) = &app.screen else { unreachable!() };
+            session.words().to_vec()
+        };
+        assert_eq!(words(&app).len(), DEFAULT_WORDS);
+        assert!(words(&app).iter().all(|w| w.contains("qu")));
+        press(&mut app, KeyCode::Tab);
+        assert!(words(&app).iter().all(|w| w.contains("qu")), "tab stays");
+
+        type_out(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        let records = store.load().unwrap().records;
+        let last = &records.last().unwrap().meta;
+        assert_eq!((last.mode.as_str(), last.drill), ("practice", false));
+        assert_eq!(last.source, "english");
+        press(&mut app, KeyCode::Char('p'));
+        assert!(words(&app).iter().all(|w| w.contains("qu")), "p again");
+        type_out(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.title(), "t", "r is the test it was launched for");
+        assert!(app.parked.is_none());
+        assert_eq!(words(&app).len(), 1);
+    }
+
+    #[test]
+    fn incognito_records_nothing_but_still_practises_on_history() {
         let tmp = TempDir::new("incognito");
-        let store = Store::at(&tmp.0);
-        let mut past = Session::new(vec!["cd".into()], None);
-        let t0 = Instant::now();
-        let ms = |n| t0 + Duration::from_millis(n);
-        past.apply(Input::Char('c'), ms(0));
-        past.apply(Input::Char('x'), ms(100));
-        past.apply(Input::Backspace, ms(200));
-        past.apply(Input::Char('d'), ms(300));
-        let meta = Meta { source: "t".into(), ..Meta::default() };
-        store.append(&Record::new(&past, t0, String::new(), meta)).unwrap();
+        let store = slow_qu(&tmp);
 
         let args = cli(&["-i", "-w", "9"]);
         assert!(args.incognito);
@@ -1861,7 +1870,10 @@ mod tests {
         assert!(app.notice.is_none());
         assert_eq!(store.load().unwrap().records.len(), 1, "not recorded");
         press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.feed.drill, [('c', 'd')]);
+        assert_eq!(app.run.meta.mode, "practice");
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(store.load().unwrap().records.len(), 1, "nor practice");
     }
 
     #[test]
@@ -1935,37 +1947,6 @@ mod tests {
             .as_deref()
             .is_some_and(|n| n.starts_with("not saved")));
         let _ = fs::remove_file(&tmp.0);
-    }
-
-    #[test]
-    fn drills_draw_on_earlier_tests_of_the_same_source() {
-        let tmp = TempDir::new("recent");
-        let store = Store::at(&tmp.0);
-        let meta =
-            |source: &str| Meta { source: source.into(), ..Meta::default() };
-        // An earlier test that missed the d of "cd".
-        let mut past = Session::new(vec!["cd".into()], None);
-        let t0 = Instant::now();
-        let ms = |n| t0 + Duration::from_millis(n);
-        past.apply(Input::Char('c'), ms(0));
-        past.apply(Input::Char('x'), ms(100));
-        past.apply(Input::Backspace, ms(200));
-        past.apply(Input::Char('d'), ms(300));
-        for source in ["t", "other"] {
-            store
-                .append(&Record::new(&past, t0, String::new(), meta(source)))
-                .unwrap();
-        }
-        let mut setup = test_setup(words("ab cd"), Limit::Words(2));
-        setup.meta = meta("t");
-        let mut app = App::new(setup, Some(store));
-        assert_eq!(app.recent.len(), 1, "only the same source");
-        for c in "ab cd".chars() {
-            press(&mut app, KeyCode::Char(c));
-        }
-        assert_eq!(app.recent.len(), 2);
-        press(&mut app, KeyCode::Char('p'));
-        assert_eq!(app.feed.drill, [('c', 'd')]);
     }
 
     #[test]

@@ -154,6 +154,7 @@ without anyone having written questions about it:
     > oui read -w 800 book.txt  # a longer stretch
     > oui read -r book.txt      # from the start of the book again
     > oui read -p 350 book.txt  # the text slides past at 350 WPM
+    > oui read -p 350 -b book.txt   # or blinks past, a word at a time
     > oui read -l french        # excerpts of a bundled French work
 
 The text stays hidden until space starts the clock. It comes a page at a
@@ -187,10 +188,20 @@ test counts when the pace still let the text in; raise the pace until it
 does not. A sliding line is harder to read than a page, so the paces that
 count say nothing of your speed on a page, and stats list them apart.
 
+-b, --blink shows the paced text a word at a time in one place instead,
+so the eyes stay still: each word is set with the letter the eye takes it
+in best from, a little left of its middle and in bold, at the centre of
+the stripe. Words share the time the text would take to slide past by
+their length, a short one no less than four letters' worth, and stay
+longer before a comma and longer still at the end of a sentence. Nothing
+can be read again, which costs understanding well before it costs speed,
+so a pace that counts blinking is not one for a page either. -s, --slide
+names the default.
+
 oui stats ends with these tests: how many count, the sentences told right
 over all of them with hits and false alarms, then per text the median WPM
 and words a minute of the tests that count -- running prose, excerpts
-and paced tests on rows of their own. -n and -s select them as they do
+and sliding and blinking tests on rows of their own. -n and -s select them as they do
 typing tests.
 
 -------------------------------------------------------------------------------

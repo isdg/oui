@@ -19,7 +19,7 @@ use ratatui::{DefaultTerminal, Frame};
 use oui::history::Store;
 use oui::probes::{self, Probe};
 use oui::read::{Input, Origin, ReadTest, Stage, Text, PROBES, WORDS};
-use oui::reads::ReadRecord;
+use oui::reads::{ReadRecord, View};
 use oui::ui;
 use oui::words;
 
@@ -27,6 +27,8 @@ const DEFAULT_LANGUAGE: &str = "english";
 const FRAME: Duration = Duration::from_millis(100);
 /// Between frames of a sliding text, which moves a character at a time.
 const SLIDE_FRAME: Duration = Duration::from_millis(30);
+/// Between frames of a blinking text, whose words must change on time.
+const BLINK_FRAME: Duration = Duration::from_millis(10);
 
 #[derive(Args, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReadArgs {
@@ -41,17 +43,32 @@ pub struct ReadArgs {
     /// Words to read, up to the end of a paragraph (default 400).
     #[arg(short, long)]
     words: Option<NonZeroUsize>,
-    /// Slide the text past at this many WPM, five characters a word,
-    /// instead of paging through it at your own speed: the test of a
-    /// pace, which counts if the text was still taken in.
+    /// Show the text at this many WPM, five characters a word, instead
+    /// of paging through it at your own speed: the test of a pace, which
+    /// counts if the text was still taken in. It slides unless --blink.
     #[arg(short, long, value_name = "WPM")]
     pace: Option<NonZeroU32>,
+    /// With --pace, slide the text through a stripe (the default).
+    #[arg(short, long, requires = "pace", conflicts_with = "blink")]
+    slide: bool,
+    /// With --pace, blink the text a word at a time in one place, so the
+    /// eyes stay still.
+    #[arg(short, long, requires = "pace")]
+    blink: bool,
     /// Read FILE from its start again.
     #[arg(short, long, requires = "file")]
     restart: bool,
     /// Record nothing: the test stays out of reads.jsonl and `oui stats`.
     #[arg(short, long)]
     incognito: bool,
+}
+
+impl ReadArgs {
+    /// The pace asked for and how its text is shown.
+    fn pace(&self) -> Option<(NonZeroU32, View)> {
+        let view = if self.blink { View::Blink } else { View::Slide };
+        self.pace.map(|pace| (pace, view))
+    }
 }
 
 /// What was typed or read before, which a new test builds on.
@@ -81,11 +98,11 @@ struct Plan {
 }
 
 impl Plan {
-    /// The test of it, sliding past at `pace` if one is set.
-    fn test(&self, pace: Option<NonZeroU32>) -> ReadTest {
+    /// The test of it, going past at `pace` if one is set.
+    fn test(&self, pace: Option<(NonZeroU32, View)>) -> ReadTest {
         let test = ReadTest::new(self.paragraphs.clone(), self.probes.clone());
         match pace {
-            Some(pace) => test.paced(pace),
+            Some((pace, view)) => test.paced(pace, view),
             None => test,
         }
     }
@@ -250,7 +267,7 @@ impl App {
         let texts = texts(store.as_ref());
         let plan =
             plan(&args, &language, args.restart, &texts, &seen, &mut rng)?;
-        let test = plan.test(args.pace);
+        let test = plan.test(args.pace());
         let notice = plan.notice.clone();
         Ok(App {
             args,
@@ -273,7 +290,7 @@ impl App {
         let (args, language) = (&self.args, &self.language);
         match plan(args, language, false, &texts, &self.seen, &mut self.rng) {
             Ok(plan) => {
-                self.test = plan.test(self.args.pace);
+                self.test = plan.test(self.args.pace());
                 self.notice = plan.notice.clone();
                 self.plan = plan;
                 self.record = None;
@@ -371,18 +388,20 @@ impl App {
     }
 
     fn title(&self) -> String {
-        match self.args.pace {
-            Some(pace) => format!("{} · {pace} wpm", self.plan.title()),
-            None => self.plan.title(),
+        let title = self.plan.title();
+        match self.args.pace() {
+            Some((pace, View::Slide)) => format!("{title} · {pace} wpm"),
+            Some((pace, View::Blink)) => format!("{title} · {pace} wpm blink"),
+            None => title,
         }
     }
 
     /// How long to wait for a key before drawing again.
     fn frame(&self) -> Duration {
-        let slides = self.test.pace().is_some();
-        match slides && self.test.stage() == Stage::Reading {
-            true => SLIDE_FRAME,
-            false => FRAME,
+        match (self.test.stage(), self.test.view()) {
+            (Stage::Reading, Some(View::Slide)) => SLIDE_FRAME,
+            (Stage::Reading, Some(View::Blink)) => BLINK_FRAME,
+            _ => FRAME,
         }
     }
 
@@ -397,12 +416,15 @@ impl App {
         let cite = self.plan.origin.cite.as_deref();
         match (self.test.stage(), &self.record) {
             (Stage::Ready, _) => ui::read::ready(frame, &self.test, &title),
-            (Stage::Reading, _) if self.test.pace().is_some() => {
-                ui::read::stripe(frame, &self.test, &title, now)
-            }
-            (Stage::Reading, _) => {
-                ui::read::page(frame, &self.test, &title, cite)
-            }
+            (Stage::Reading, _) => match self.test.view() {
+                Some(View::Slide) => {
+                    ui::read::stripe(frame, &self.test, &title, now)
+                }
+                Some(View::Blink) => {
+                    ui::read::blink(frame, &self.test, &title, now)
+                }
+                None => ui::read::page(frame, &self.test, &title, cite),
+            },
             (Stage::Probing, _) => ui::read::probe(frame, &self.test, &title),
             (Stage::Done, Some((record, kept))) => {
                 let title = match cite {
@@ -664,6 +686,44 @@ mod tests {
         }
         let record = &store.load_reads().unwrap().records[0];
         assert_eq!(record.pace, Some(300.0));
+        assert_eq!(record.view, Some(View::Slide));
+        assert!((record.wpm - 300.0).abs() < 0.5, "{}", record.wpm);
+    }
+
+    #[test]
+    fn blink_shows_the_paced_text_a_word_at_a_time() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            args: ReadArgs,
+        }
+        let parse = |line: &[&str]| Cli::try_parse_from(line).map(|c| c.args);
+        let view = |line: &[&str]| parse(line).unwrap().pace().map(|p| p.1);
+        assert_eq!(view(&["read", "-p", "300"]), Some(View::Slide));
+        assert_eq!(view(&["read", "-p", "300", "--slide"]), Some(View::Slide));
+        assert_eq!(view(&["read", "-b", "-p", "300"]), Some(View::Blink));
+        assert_eq!(view(&["read"]), None);
+        assert!(parse(&["read", "--blink"]).is_err(), "at what pace?");
+        assert!(parse(&["read", "-p", "300", "-b", "-s"]).is_err());
+
+        let tmp = TempDir::new("blink");
+        let file = book(&tmp.0, 30);
+        let store = Store::at(tmp.0.join("home"));
+        let pace = NonZeroU32::new(300);
+        let args = ReadArgs { pace, blink: true, ..args(&file, 80) };
+        let mut app = App::new(args, None, Some(store.clone())).unwrap();
+        assert_eq!(app.title(), "read · book.txt · 80 words · 300 wpm blink");
+        let t0 = Instant::now();
+        app.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), t0);
+        assert_eq!(app.frame(), BLINK_FRAME);
+        app.tick(t0 + app.test.slide().unwrap());
+        while app.test.stage() != Stage::Done {
+            press(&mut app, KeyCode::Char('n'));
+        }
+        let record = &store.load_reads().unwrap().records[0];
+        assert_eq!(record.view, Some(View::Blink));
         assert!((record.wpm - 300.0).abs() < 0.5, "{}", record.wpm);
     }
 

@@ -37,6 +37,9 @@ pub struct ReadRecord {
     /// The speed the text slid by at, when it set the pace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pace: Option<f64>,
+    /// How a paced text was shown; sliding, if a paced record lacks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<View>,
     pub turns: Vec<Turn>,
     pub probes: Vec<Asked>,
     /// The terminal's size, as line length changes how fast one reads.
@@ -87,6 +90,19 @@ impl ReadRecord {
     }
 }
 
+/// How a paced text is shown.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum View {
+    /// Through a stripe, a character at a time.
+    #[default]
+    Slide,
+    /// A word at a time in one place, the eyes at rest.
+    Blink,
+}
+
 /// A stretch of text shown, as `[first word, word after its last, ms]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Turn(pub usize, pub usize, pub u64);
@@ -114,6 +130,7 @@ pub(crate) mod tests {
             elapsed_ms: 800,
             wpm: 210.0,
             pace: None,
+            view: None,
             turns: vec![Turn(0, 2, 500), Turn(2, 3, 300)],
             probes: vec![Asked("It rained.".into(), true, false, 1200)],
             cols: 80,
@@ -163,7 +180,7 @@ pub(crate) mod tests {
     fn optional_fields_are_stored_only_when_present() {
         let bare = record("t");
         let json = serde_json::to_string(&bare).unwrap();
-        for field in ["cite", "file", "pace"] {
+        for field in ["cite", "file", "pace", "view"] {
             assert!(!json.contains(field), "{field} in {json}");
         }
         assert_eq!(serde_json::from_str::<ReadRecord>(&json).unwrap(), bare);

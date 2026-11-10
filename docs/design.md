@@ -221,6 +221,14 @@ and the reader says which.
   pace followed, not a speed of one's own, and a sliding line reads
   unlike a page, so the record carries `pace` and stats keep it apart.
   The end is timed from the pace, not from the frame that notices it.
+- **Blink**: `--blink` shows the paced text a word at a time instead
+  (RSVP), since following a sliding line takes pursuit movements of the
+  eyes that reading does not. Each word sits with its pivot, a letter
+  left of its middle, at the centre of the stripe. The words share the
+  time the text would slide past in, so the pace is the same figure in
+  both views: each by its length, no less than four letters, plus a
+  pause after a comma and twice that at a sentence's end. The record
+  carries `view`; a paced record without one slid.
 - **Counting**: a test counts from 80% right. Ten probes are a coarse
   gate (guessing passes one time in eighteen); the pooled rate is the one
   to trust.

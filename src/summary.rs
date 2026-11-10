@@ -14,7 +14,7 @@ use crate::history::{Meta, Record};
 use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
 use crate::practice::Target;
-use crate::reads::{ReadRecord, PASS};
+use crate::reads::{self, ReadRecord, PASS};
 use crate::stats::{self, Report, Rhythm, Tally, CHARS_PER_WORD};
 use crate::ui::{results, show};
 
@@ -475,7 +475,10 @@ pub fn reading(records: &[ReadRecord]) -> String {
     let mut texts: Vec<(String, Vec<&ReadRecord>)> = Vec::new();
     for record in records {
         let kind = match (record.pace, record.continuous) {
-            (Some(_), _) => "paced",
+            (Some(_), _) => match record.view.unwrap_or_default() {
+                reads::View::Slide => "slide",
+                reads::View::Blink => "blink",
+            },
             (None, true) => "running",
             (None, false) => "excerpts",
         };
@@ -764,6 +767,12 @@ mod tests {
         assert_eq!(row("book.txt · running"), "3 2 250 200 73%", "{out}");
         assert_eq!(row("english · excerpts"), "1 1 250 200 90%", "{out}");
         assert_eq!(reading(&[]), "");
+        let paced = |view| {
+            let pace = Some(300.0);
+            ReadRecord { pace, view, ..read("b", true, 300.0, 10) }
+        };
+        let out = reading(&[paced(None), paced(Some(reads::View::Blink))]);
+        assert!(out.contains("b · slide") && out.contains("b · blink"));
         let none = reading(&records[2..3]);
         assert!(none.contains("1      0     —          —"), "{none}");
     }

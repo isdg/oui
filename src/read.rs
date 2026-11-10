@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::external;
 use crate::probes::Probe;
-use crate::reads::{self, Asked, ReadRecord, Turn};
+use crate::reads::{self, Asked, ReadRecord, Turn, View};
 use crate::sentences;
 use crate::stats;
 use crate::words::{self, Passage};
@@ -17,6 +17,12 @@ use crate::words::{self, Passage};
 pub const WORDS: usize = 400;
 /// Probes asked after the text.
 pub const PROBES: usize = 10;
+
+/// Characters a blinking word stays for at least, however short.
+const SHORT: usize = 4;
+/// Characters longer it stays before a comma, and twice that before a
+/// full stop.
+const PAUSE: usize = 3;
 
 /// A text to read, as paragraphs of words.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -153,8 +159,9 @@ pub struct ReadTest {
     since: Option<Instant>,
     turns: Vec<Turn>,
     answers: Vec<(bool, u64)>,
-    /// The WPM the text slides past at, rather than being paged through.
-    pace: Option<u32>,
+    /// The WPM the text goes past at and how, rather than being paged
+    /// through.
+    pace: Option<(u32, View)>,
 }
 
 impl ReadTest {
@@ -173,14 +180,18 @@ impl ReadTest {
         }
     }
 
-    /// The test with its text sliding past at `wpm`, five characters a
+    /// The test with its text going past at `wpm`, five characters a
     /// word, for the reader to keep up with.
-    pub fn paced(self, wpm: NonZeroU32) -> Self {
-        ReadTest { pace: Some(wpm.get()), ..self }
+    pub fn paced(self, wpm: NonZeroU32, view: View) -> Self {
+        ReadTest { pace: Some((wpm.get(), view)), ..self }
     }
 
     pub fn pace(&self) -> Option<u32> {
-        self.pace
+        self.pace.map(|(wpm, _)| wpm)
+    }
+
+    pub fn view(&self) -> Option<View> {
+        self.pace.map(|(_, view)| view)
     }
 
     /// Characters of the text, a space after each word included.
@@ -194,20 +205,39 @@ impl ReadTest {
         60_000.0 / (f64::from(pace) * stats::CHARS_PER_WORD)
     }
 
-    /// How long the whole text takes to slide past, if it does.
+    /// How long the whole text takes to go past, if it does.
     pub fn slide(&self) -> Option<Duration> {
-        let ms = Self::per_char(self.pace?) * self.chars() as f64;
+        let ms = Self::per_char(self.pace()?) * self.chars() as f64;
         Some(Duration::from_millis(ms.round() as u64))
     }
 
     /// Characters of a sliding text gone past by `now`.
     pub fn slid(&self, now: Instant) -> usize {
-        let Some(pace) = self.pace.filter(|_| self.stage == Stage::Reading)
+        let Some(pace) = self.pace().filter(|_| self.stage == Stage::Reading)
         else {
             return 0;
         };
         let slid = self.shown(now) as f64 / Self::per_char(pace);
         (slid as usize).min(self.chars())
+    }
+
+    /// The word a blinking text shows at `now`. Words share the time the
+    /// text would take to slide past, each by its [`dwell`].
+    pub fn blinked(&self, now: Instant) -> usize {
+        let (Some(slide), Stage::Reading) = (self.slide(), self.stage) else {
+            return 0;
+        };
+        let dwells = self.paragraphs.iter().flatten().map(|w| dwell(w));
+        let dwells: Vec<usize> = dwells.collect();
+        let whole: usize = dwells.iter().sum();
+        let gone = self.shown(now) as f64 / slide.as_millis() as f64;
+        let mut end = 0;
+        let shown = |dwell: &usize| {
+            end += dwell;
+            gone * (whole as f64) < end as f64
+        };
+        let last = dwells.len().saturating_sub(1);
+        dwells.iter().position(shown).unwrap_or(last)
     }
 
     /// Advances the clock: a sliding text ends once all of it has gone
@@ -350,7 +380,8 @@ impl ReadTest {
             chars,
             elapsed_ms,
             wpm: 0.0,
-            pace: self.pace.map(f64::from),
+            pace: self.pace().map(f64::from),
+            view: self.view(),
             turns: self.turns.clone(),
             probes: self.probes.iter().zip(&self.answers).map(asked).collect(),
             cols: size.0,
@@ -359,6 +390,18 @@ impl ReadTest {
         record.wpm = stats::wpm(chars, record.elapsed());
         record
     }
+}
+
+/// The share of the time a blinking word stays for: its length, a short
+/// word's no less than [`SHORT`], and a [`PAUSE`] where the text has one.
+fn dwell(word: &str) -> usize {
+    let letters = word.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let pause = match word[letters.len()..].chars().next() {
+        Some('.' | '?' | '!' | '…') => 2 * PAUSE,
+        Some(',' | ';' | ':' | '—' | '–') => PAUSE,
+        _ => 0,
+    };
+    word.chars().count().max(SHORT) + 1 + pause
 }
 
 #[cfg(test)]
@@ -511,7 +554,7 @@ mod tests {
     fn a_paced_text_slides_past_at_its_pace_and_ends_by_itself() {
         // Ten characters at 600 WPM, fifty a second: 200 ms.
         let pace = NonZeroU32::new(600).unwrap();
-        let mut t = test(&[true]).paced(pace);
+        let mut t = test(&[true]).paced(pace, View::Slide);
         let t0 = Instant::now();
         assert_eq!(t.slide(), Some(Duration::from_millis(200)));
         assert_eq!(t.slid(t0), 0, "not started");
@@ -529,12 +572,36 @@ mod tests {
         let record = t.record("t".into(), Origin::default(), (80, 24));
         assert_eq!(record.turns, [Turn(0, 5, 200)]);
         assert_eq!((record.pace, record.wpm), (Some(600.0), 600.0));
+        assert_eq!(record.view, Some(View::Slide));
         assert_eq!(record.probes[0].3, 40, "answered from the late frame");
         assert_eq!(test(&[]).slide(), None, "paged tests do not slide");
-        let mut unasked = test(&[]).paced(pace);
+        let mut unasked = test(&[]).paced(pace, View::Slide);
         unasked.apply(Input::Next, t0);
         unasked.tick(t0 + MS * 200);
         assert_eq!(unasked.stage(), Stage::Done);
+    }
+
+    #[test]
+    fn a_blinking_text_shows_a_word_at_a_time_for_its_dwell() {
+        assert_eq!(dwell("a"), 5, "as long as a word of four");
+        assert_eq!(dwell("reading"), 8);
+        assert_eq!((dwell("so,"), dwell("end.\u{201d}")), (8, 12));
+        assert_eq!(dwell("—"), 8);
+        // Five words of one dwell share the 200 ms of 600 WPM.
+        let pace = NonZeroU32::new(600).unwrap();
+        let mut t = test(&[true]).paced(pace, View::Blink);
+        let t0 = Instant::now();
+        assert_eq!(t.blinked(t0), 0, "not started");
+        t.apply(Input::Next, t0);
+        let at = |t: &ReadTest, ms| t.blinked(t0 + MS * ms);
+        assert_eq!([at(&t, 0), at(&t, 39), at(&t, 40)], [0, 0, 1]);
+        assert_eq!([at(&t, 100), at(&t, 199), at(&t, 900)], [2, 4, 4]);
+        t.tick(t0 + MS * 200);
+        assert_eq!(t.stage(), Stage::Probing, "as long as it slides");
+        t.apply(Input::No, t0 + MS * 300);
+        let record = t.record("t".into(), Origin::default(), (80, 24));
+        assert_eq!((record.view, record.wpm), (Some(View::Blink), 600.0));
+        assert_eq!(test(&[]).view(), None);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use super::results::rule;
 use super::typing::{slide, wrap};
 use super::{clock, lines, MAX_WIDTH};
 use crate::read::ReadTest;
-use crate::reads::{Asked, ReadRecord, Turn, PASS};
+use crate::reads::{Asked, ReadRecord, Turn, View, PASS};
 
 /// Columns of text at most: longer lines are slower to read.
 const MEASURE: u16 = 72;
@@ -111,12 +111,19 @@ pub fn ready(frame: &mut Frame, test: &ReadTest, title: &str) {
     let (area, footer) = frame_of(frame, title);
     let (words, probes) = (test.words(), test.probes().len());
     let then = format!("then {probes} sentences to recognise.");
-    let text = match test.slide() {
-        Some(slide) => vec![
-            format!("{words} words slide past in {}, {then}", clock(slide)),
+    let past = test.slide().map(clock).unwrap_or_default();
+    let text = match test.view() {
+        Some(View::Slide) => vec![
+            format!("{words} words slide past in {past}, {then}"),
             String::new(),
             "Keep up with the text: it does not wait, and it".to_string(),
             "does not come back.".to_string(),
+        ],
+        Some(View::Blink) => vec![
+            format!("{words} words blink past in {past}, {then}"),
+            String::new(),
+            "Keep your eyes on the bold letter: each word comes".to_string(),
+            "to it, and none comes back.".to_string(),
         ],
         None => vec![
             format!("{words} words on {} pages, {then}", test.pages().len()),
@@ -161,16 +168,23 @@ pub fn page(
     frame.render_widget(Line::from(at).dim().right_aligned(), footer);
 }
 
-/// A paced text sliding past the centre of the typing screen's stripe.
-pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
+/// The stripe of the typing screen under the header, for a paced text.
+fn band(frame: &mut Frame, title: &str) -> Rect {
     use Constraint::{Fill, Length};
 
     let area = frame.area().centered_horizontally(Constraint::Max(MAX_WIDTH));
-    let [header, _, slider, _, footer] =
+    let [header, _, band, _, footer] =
         Layout::vertical([Length(1), Fill(1), Length(3), Fill(1), Length(1)])
             .areas(area);
     let heading = Line::from(vec![" oui".bold(), format!(" · {title}").into()]);
     frame.render_widget(heading, header);
+    frame.render_widget(Line::from(" esc abandon").dim(), footer);
+    band
+}
+
+/// A paced text sliding past the centre of the stripe.
+pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
+    let band = band(frame, title);
     let words: Vec<&str> =
         test.paragraphs().iter().flatten().map(String::as_str).collect();
     let text: Vec<char> = words.join(" ").chars().collect();
@@ -178,8 +192,33 @@ pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
     let from = at.saturating_sub(REACH);
     let to = (at + REACH).min(text.len());
     let shown: String = text[from..to].iter().collect();
-    slide(frame, slider, vec![Span::raw(shown)], at - from);
-    frame.render_widget(Line::from(" esc abandon").dim(), footer);
+    slide(frame, band, vec![Span::raw(shown)], at - from);
+}
+
+/// A paced text a word at a time, each with its [`pivot`] at the centre
+/// of the stripe.
+pub fn blink(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
+    let band = band(frame, title);
+    let mut words = test.paragraphs().iter().flatten();
+    let Some(word) = words.nth(test.blinked(now)) else { return };
+    let letters: Vec<char> = word.chars().collect();
+    let at = pivot(letters.len());
+    let part = |of: &[char]| Span::raw(of.iter().collect::<String>());
+    let (before, rest) = letters.split_at(at);
+    let (on, after) = rest.split_at(1.min(rest.len()));
+    slide(frame, band, vec![part(before), part(on).bold(), part(after)], at);
+}
+
+/// The letter of a word of `letters` the eye takes it in best from: a
+/// little left of its middle.
+fn pivot(letters: usize) -> usize {
+    match letters {
+        0..=1 => 0,
+        2..=5 => 1,
+        6..=9 => 2,
+        10..=13 => 3,
+        _ => 4,
+    }
 }
 
 /// A sentence to recognise, the text out of sight.
@@ -367,7 +406,7 @@ mod tests {
     fn a_paced_text_slides_through_the_centre_of_its_stripe() {
         // 600 WPM is fifty characters a second.
         let pace = std::num::NonZeroU32::new(600).unwrap();
-        let mut test = test().paced(pace);
+        let mut test = test().paced(pace, View::Slide);
         let rows = render(70, 10, |f| ready(f, &test, "en"));
         let screen = rows.join("\n");
         assert!(screen.contains("7 words slide past in 0:00, then 2"));
@@ -384,6 +423,32 @@ mod tests {
         assert_eq!(rows[3], "│     aa bb cc dd ee ff│", "six gone by");
         let rows = at(400);
         assert_eq!(rows[3], "│dd ee ff gg           │", "its end");
+        assert!(rows[6].contains("esc abandon"));
+    }
+
+    #[test]
+    fn a_blinking_text_sets_each_word_by_its_pivot() {
+        assert_eq!([pivot(1), pivot(2), pivot(5), pivot(6)], [0, 1, 1, 2]);
+        assert_eq!([pivot(9), pivot(10), pivot(13), pivot(14)], [2, 3, 3, 4]);
+        let words = words::split("a recognition of it.");
+        let pace = std::num::NonZeroU32::new(600).unwrap();
+        let mut test =
+            ReadTest::new(vec![words], Vec::new()).paced(pace, View::Blink);
+        let rows = render(70, 10, |f| ready(f, &test, "en"));
+        let screen = rows.join("\n");
+        assert!(screen.contains("4 words blink past in 0:00, then 0"));
+        let t0 = Instant::now();
+        test.apply(Input::Next, t0);
+        // Dwells of 5, 12, 5 and 11 share 440 ms: 67, 160, 67 and 147.
+        let at = |ms| {
+            let now = t0 + Duration::from_millis(ms);
+            render(24, 7, |f| blink(f, &test, "en", now))
+        };
+        assert_eq!(at(0)[3], "│           a          │");
+        assert_eq!(at(100)[3], "│        recognition   │", "its fourth");
+        assert_eq!(at(230)[3], "│          of          │");
+        let rows = at(300);
+        assert_eq!(rows[3], "│          it.         │");
         assert!(rows[6].contains("esc abandon"));
     }
 

@@ -11,6 +11,8 @@ pub mod keyboard;
 pub mod ngrams;
 pub mod plot;
 pub mod practice;
+pub mod probes;
+pub mod sentences;
 pub mod session;
 pub mod stats;
 pub mod summary;

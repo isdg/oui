@@ -12,6 +12,7 @@ pub mod ngrams;
 pub mod plot;
 pub mod practice;
 pub mod probes;
+pub mod read;
 pub mod reads;
 pub mod sentences;
 pub mod session;

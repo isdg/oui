@@ -2,10 +2,15 @@
 //! one JSON record per reading test, with the time each stretch of text
 //! was shown and each probe's answer, so any figure can be recomputed.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 /// Bumped on any change old readers would misread; newer records are skipped.
 pub const VERSION: u32 = 1;
+/// The share of probes answered right from which a test's speed counts;
+/// guessing reaches it on ten probes one time in eighteen.
+pub const PASS: f64 = 0.8;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReadRecord {
@@ -37,6 +42,49 @@ pub struct ReadRecord {
     /// The terminal's size, as line length changes how fast one reads.
     pub cols: u16,
     pub rows: u16,
+}
+
+impl ReadRecord {
+    pub fn elapsed(&self) -> Duration {
+        Duration::from_millis(self.elapsed_ms)
+    }
+
+    /// Words as written a minute, as reading rates are published; `wpm`
+    /// counts five characters a word, as typing does.
+    pub fn words_a_minute(&self) -> f64 {
+        match self.elapsed().as_secs_f64() / 60.0 {
+            0.0 => 0.0,
+            minutes => self.words as f64 / minutes,
+        }
+    }
+
+    /// Sentences read that were known again, among those asked.
+    pub fn hits(&self) -> (usize, usize) {
+        self.told(true)
+    }
+
+    /// Sentences never read that were taken for read, among those asked.
+    pub fn false_alarms(&self) -> (usize, usize) {
+        self.told(false)
+    }
+
+    /// The probes answered "read" among those that were `old`.
+    fn told(&self, old: bool) -> (usize, usize) {
+        let asked = self.probes.iter().filter(|p| p.1 == old);
+        (asked.clone().filter(|p| p.2).count(), asked.count())
+    }
+
+    /// Probes answered right, among them all.
+    pub fn right(&self) -> (usize, usize) {
+        let right = self.probes.iter().filter(|p| p.1 == p.2).count();
+        (right, self.probes.len())
+    }
+
+    /// Whether the text was taken in well enough for its speed to count.
+    pub fn counts(&self) -> bool {
+        let (right, asked) = self.right();
+        asked > 0 && right as f64 >= PASS * asked as f64
+    }
 }
 
 /// A stretch of text shown, as `[first word, word after its last, ms]`.
@@ -81,6 +129,34 @@ pub(crate) mod tests {
             json.contains(r#""probes":[["It rained.",true,false,1200]]"#),
             "{json}"
         );
+    }
+
+    #[test]
+    fn answers_are_scored_against_what_was_read() {
+        let asked = |old, answer| Asked(String::new(), old, answer, 0);
+        let probes = vec![
+            asked(true, true),
+            asked(true, false),
+            asked(true, true),
+            asked(false, false),
+            asked(false, true),
+        ];
+        let r = ReadRecord { probes, ..record("t") };
+        assert_eq!((r.hits(), r.false_alarms()), ((2, 3), (1, 2)));
+        assert_eq!(r.right(), (3, 5));
+        assert!(!r.counts(), "three in five is under the pass");
+        let four = vec![asked(true, true); 4];
+        let passed = [four, vec![asked(false, true)]].concat();
+        assert!(ReadRecord { probes: passed, ..record("t") }.counts());
+        assert!(!ReadRecord { probes: vec![], ..record("t") }.counts());
+    }
+
+    #[test]
+    fn real_words_a_minute_differ_from_five_character_ones() {
+        let r = ReadRecord { words: 4, elapsed_ms: 1000, ..record("t") };
+        assert_eq!(r.words_a_minute(), 240.0);
+        let unread = ReadRecord { elapsed_ms: 0, ..record("t") };
+        assert_eq!(unread.words_a_minute(), 0.0);
     }
 
     #[test]

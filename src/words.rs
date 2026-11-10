@@ -354,6 +354,19 @@ pub fn external(language: &str, dir: &Path) -> Result<Vec<Passage>> {
     }
 }
 
+/// The works among passages cited so, each as its range of them: a work
+/// is a run of passages under one citation, and uncited ones stand alone.
+pub fn works<'a>(
+    cites: impl Iterator<Item = Option<&'a str>>,
+) -> Vec<Range<usize>> {
+    let cites: Vec<Option<&str>> = cites.collect();
+    let opens =
+        |&i: &usize| i == 0 || cites[i].is_none() || cites[i] != cites[i - 1];
+    let starts: Vec<usize> = (0..cites.len()).filter(opens).collect();
+    let end = |i: usize| *starts.get(i + 1).unwrap_or(&cites.len());
+    (0..starts.len()).map(|i| starts[i]..end(i)).collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// Words drawn at random from a list.
@@ -400,15 +413,10 @@ impl Source {
     /// tests continuing it read on from its start; else 0.
     pub fn start(&self, rng: &mut Rng) -> usize {
         let Source::Passages { starts, cites, .. } = self else { return 0 };
-        // A work is a run of passages under one citation; uncited ones
-        // stand alone.
-        let opens = |&i: &usize| {
-            i == 0 || cites[i].is_none() || cites[i] != cites[i - 1]
-        };
-        let works: Vec<usize> = (0..starts.len()).filter(opens).collect();
+        let works = works(cites.iter().map(Option::as_deref));
         match works.is_empty() {
             true => 0,
-            false => starts[works[rng.usize(..works.len())]],
+            false => starts[works[rng.usize(..works.len())].start],
         }
     }
 

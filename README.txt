@@ -183,10 +183,12 @@ to ~/.oui/reads.jsonl: the time on each page and every answer.
 
 -p WPM tests a pace instead of finding yours: the text slides through the
 stripe of the typing screen at that speed, five characters a word, with
-no way to slow it or go back, and the same ten sentences follow. Such a
-test counts when the pace still let the text in; raise the pace until it
-does not. A sliding line is harder to read than a page, so the paces that
-count say nothing of your speed on a page, and stats list them apart.
+no way to slow it or go back, and the same ten sentences follow. space
+holds the text out of sight with its clock stopped, and lets it go on;
+esc or q abandons the test unrecorded. Such a test counts when the pace
+still let the text in; raise the pace until it does not. A sliding line
+is harder to read than a page, so the paces that count say nothing of
+your speed on a page, and stats list them apart.
 
 -b, --blink shows the paced text a word at a time in one place instead,
 so the eyes stay still: each word is set with the letter the eye takes it

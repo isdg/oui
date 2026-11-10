@@ -221,6 +221,8 @@ and the reader says which.
   pace followed, not a speed of one's own, and a sliding line reads
   unlike a page, so the record carries `pace` and stats keep it apart.
   The end is timed from the pace, not from the frame that notices it.
+  `space` pauses: the clock stops and the text is hidden, so a pause
+  cannot be used to read again, and each run between pauses is a turn.
 - **Blink**: `--blink` shows the paced text a word at a time instead
   (RSVP), since following a sliding line takes pursuit movements of the
   eyes that reading does not. Each word sits with its pivot, a letter

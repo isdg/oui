@@ -168,8 +168,9 @@ pub fn page(
     frame.render_widget(Line::from(at).dim().right_aligned(), footer);
 }
 
-/// The stripe of the typing screen under the header, for a paced text.
-fn band(frame: &mut Frame, title: &str) -> Rect {
+/// The stripe of the typing screen under the header, for a paced text
+/// to go through: none while the text is paused, and kept out of sight.
+fn band(frame: &mut Frame, test: &ReadTest, title: &str) -> Option<Rect> {
     use Constraint::{Fill, Length};
 
     let area = frame.area().centered_horizontally(Constraint::Max(MAX_WIDTH));
@@ -178,13 +179,20 @@ fn band(frame: &mut Frame, title: &str) -> Rect {
             .areas(area);
     let heading = Line::from(vec![" oui".bold(), format!(" · {title}").into()]);
     frame.render_widget(heading, header);
-    frame.render_widget(Line::from(" esc abandon").dim(), footer);
-    band
+    let keys = match test.paused() {
+        true => " space go on · esc abandon",
+        false => " space pause · esc abandon",
+    };
+    frame.render_widget(Line::from(keys).dim(), footer);
+    if test.paused() {
+        slide(frame, band, vec!["paused".dim()], 3);
+    }
+    (!test.paused()).then_some(band)
 }
 
 /// A paced text sliding past the centre of the stripe.
 pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
-    let band = band(frame, title);
+    let Some(band) = band(frame, test, title) else { return };
     let words: Vec<&str> =
         test.paragraphs().iter().flatten().map(String::as_str).collect();
     let text: Vec<char> = words.join(" ").chars().collect();
@@ -198,7 +206,7 @@ pub fn stripe(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
 /// A paced text a word at a time, each with its [`pivot`] at the centre
 /// of the stripe.
 pub fn blink(frame: &mut Frame, test: &ReadTest, title: &str, now: Instant) {
-    let band = band(frame, title);
+    let Some(band) = band(frame, test, title) else { return };
     let mut words = test.paragraphs().iter().flatten();
     let Some(word) = words.nth(test.blinked(now)) else { return };
     let letters: Vec<char> = word.chars().collect();
@@ -423,7 +431,7 @@ mod tests {
         assert_eq!(rows[3], "│     aa bb cc dd ee ff│", "six gone by");
         let rows = at(400);
         assert_eq!(rows[3], "│dd ee ff gg           │", "its end");
-        assert!(rows[6].contains("esc abandon"));
+        assert!(rows[6].contains("space pause"));
     }
 
     #[test]
@@ -449,7 +457,24 @@ mod tests {
         assert_eq!(at(230)[3], "│          of          │");
         let rows = at(300);
         assert_eq!(rows[3], "│          it.         │");
-        assert!(rows[6].contains("esc abandon"));
+        assert!(rows[6].contains("space pause"));
+    }
+
+    #[test]
+    fn a_paused_text_is_out_of_sight() {
+        let pace = std::num::NonZeroU32::new(600).unwrap();
+        let t0 = Instant::now();
+        for view in [View::Slide, View::Blink] {
+            let mut test = test().paced(pace, view);
+            test.apply(Input::Next, t0);
+            test.apply(Input::Pause, t0);
+            let rows = render(24, 7, |f| match view {
+                View::Slide => stripe(f, &test, "en", t0),
+                View::Blink => blink(f, &test, "en", t0),
+            });
+            assert_eq!(rows[3], "│        paused        │", "{rows:?}");
+            assert!(rows[6].contains("space go on"), "{rows:?}");
+        }
     }
 
     #[test]

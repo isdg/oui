@@ -344,6 +344,7 @@ impl App {
         if ctrl && key.code == Char('c') {
             return false;
         }
+        let paced = self.test.pace().is_some();
         let input = match (self.test.stage(), key.code) {
             (Stage::Done, Char('r')) => {
                 self.next();
@@ -355,6 +356,10 @@ impl App {
             }
             (Stage::Done | Stage::Ready, Char('q')) | (_, Esc) => return false,
             (Stage::Ready, Char(' ') | Enter) => Some(Input::Next),
+            (Stage::Reading, Char('q')) if paced => return false,
+            (Stage::Reading, Char(' ' | 'p') | Enter) if paced => {
+                Some(Input::Pause)
+            }
             (
                 Stage::Reading,
                 Char(' ' | 'j' | 'l') | Enter | Right | Down | PageDown,
@@ -399,6 +404,7 @@ impl App {
     /// How long to wait for a key before drawing again.
     fn frame(&self) -> Duration {
         match (self.test.stage(), self.test.view()) {
+            _ if self.test.paused() => FRAME,
             (Stage::Reading, Some(View::Slide)) => SLIDE_FRAME,
             (Stage::Reading, Some(View::Blink)) => BLINK_FRAME,
             _ => FRAME,
@@ -675,7 +681,7 @@ mod tests {
         let t0 = Instant::now();
         app.key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE), t0);
         assert_eq!(app.frame(), SLIDE_FRAME);
-        press(&mut app, KeyCode::Char(' '));
+        press(&mut app, KeyCode::Right);
         let slide = app.test.slide().unwrap();
         app.tick(t0 + slide - Duration::from_millis(1));
         assert_eq!(app.test.stage(), Stage::Reading, "no key hurries it");
@@ -725,6 +731,33 @@ mod tests {
         let record = &store.load_reads().unwrap().records[0];
         assert_eq!(record.view, Some(View::Blink));
         assert!((record.wpm - 300.0).abs() < 0.5, "{}", record.wpm);
+    }
+
+    #[test]
+    fn space_pauses_a_paced_test_and_q_quits_it() {
+        let tmp = TempDir::new("pause");
+        let file = book(&tmp.0, 30);
+        let pace = NonZeroU32::new(300);
+        let paced = ReadArgs { pace, ..args(&file, 80) };
+        let mut app = App::new(paced.clone(), None, None).unwrap();
+        let t0 = Instant::now();
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        app.key(space, t0);
+        app.key(space, t0 + Duration::from_secs(1));
+        assert!(app.test.paused());
+        assert_eq!(app.frame(), FRAME);
+        let slide = app.test.slide().unwrap();
+        app.tick(t0 + slide);
+        assert_eq!(app.test.stage(), Stage::Reading, "held");
+        app.key(space, t0 + slide);
+        assert!(!app.test.paused());
+        assert_eq!(app.frame(), SLIDE_FRAME);
+        app.tick(t0 + slide * 2 - Duration::from_secs(1));
+        assert_eq!(app.test.stage(), Stage::Probing);
+        let mut app = App::new(paced, None, None).unwrap();
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!press(&mut app, KeyCode::Char('q')), "q abandons it");
+        assert!(app.record.is_none());
     }
 
     #[test]

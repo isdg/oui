@@ -116,11 +116,13 @@ impl Text {
     }
 }
 
-/// What the reader can do: turn the page either way, or answer a probe.
+/// What the reader can do: turn the page either way, hold a paced text
+/// or let it go on, or answer a probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Input {
     Next,
     Back,
+    Pause,
     Yes,
     No,
 }
@@ -162,6 +164,9 @@ pub struct ReadTest {
     /// The WPM the text goes past at and how, rather than being paged
     /// through.
     pace: Option<(u32, View)>,
+    /// Milliseconds a paced text had run for when it was last paused.
+    held: u64,
+    paused: bool,
 }
 
 impl ReadTest {
@@ -177,6 +182,8 @@ impl ReadTest {
             turns: Vec::new(),
             answers: Vec::new(),
             pace: None,
+            held: 0,
+            paused: false,
         }
     }
 
@@ -217,7 +224,7 @@ impl ReadTest {
         else {
             return 0;
         };
-        let slid = self.shown(now) as f64 / Self::per_char(pace);
+        let slid = self.run(now) as f64 / Self::per_char(pace);
         (slid as usize).min(self.chars())
     }
 
@@ -230,7 +237,7 @@ impl ReadTest {
         let dwells = self.paragraphs.iter().flatten().map(|w| dwell(w));
         let dwells: Vec<usize> = dwells.collect();
         let whole: usize = dwells.iter().sum();
-        let gone = self.shown(now) as f64 / slide.as_millis() as f64;
+        let gone = self.run(now) as f64 / slide.as_millis() as f64;
         let mut end = 0;
         let shown = |dwell: &usize| {
             end += dwell;
@@ -245,11 +252,56 @@ impl ReadTest {
     pub fn tick(&mut self, now: Instant) {
         let Some(slide) = self.slide() else { return };
         let ms = u64::try_from(slide.as_millis()).unwrap_or(u64::MAX);
-        if self.stage == Stage::Reading && self.shown(now) >= ms {
-            self.turns.push(Turn(0, self.words(), ms));
+        if self.stage == Stage::Reading && self.run(now) >= ms {
+            self.stretch(self.words(), ms);
             self.since = Some(now);
             self.close();
         }
+    }
+
+    /// Whether a paced text is held, its clock stopped.
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Milliseconds a paced text has run for, pauses aside.
+    fn run(&self, now: Instant) -> u64 {
+        self.held + self.shown(now)
+    }
+
+    /// Words of a paced text gone past by `now`.
+    fn passed(&self, now: Instant) -> usize {
+        if self.view() == Some(View::Blink) {
+            return self.blinked(now);
+        }
+        let slid = self.slid(now);
+        let mut end = 0;
+        let passed = |word: &&String| {
+            end += word.chars().count() + 1;
+            end <= slid
+        };
+        self.paragraphs.iter().flatten().take_while(passed).count()
+    }
+
+    /// Logs the paced text up to word `end`, `ms` into its run, as a turn
+    /// from where the last one stopped.
+    fn stretch(&mut self, end: usize, ms: u64) {
+        let start = self.turns.last().map_or(0, |turn| turn.1);
+        let logged: u64 = self.turns.iter().map(|turn| turn.2).sum();
+        self.turns.push(Turn(start, end, ms.saturating_sub(logged)));
+    }
+
+    /// Holds a paced text and stops its clock, or lets both go on.
+    fn pause(&mut self, now: Instant) {
+        match self.paused {
+            true => self.since = Some(now),
+            false => {
+                let (passed, run) = (self.passed(now), self.run(now));
+                self.stretch(passed, run);
+                (self.held, self.since) = (run, None);
+            }
+        }
+        self.paused = !self.paused;
     }
 
     /// Ends the reading: on to the probes, if there are any.
@@ -314,7 +366,10 @@ impl ReadTest {
                 self.stage = Stage::Reading;
                 self.since = Some(now);
             }
-            // A sliding text turns no pages.
+            (Stage::Reading, Input::Pause) if self.pace.is_some() => {
+                self.pause(now);
+            }
+            // A paced text turns no pages.
             (Stage::Reading, _) if self.pace.is_some() => {}
             (Stage::Reading, Input::Next) => {
                 self.turn(now);
@@ -602,6 +657,43 @@ mod tests {
         let record = t.record("t".into(), Origin::default(), (80, 24));
         assert_eq!((record.view, record.wpm), (Some(View::Blink), 600.0));
         assert_eq!(test(&[]).view(), None);
+    }
+
+    #[test]
+    fn a_pause_holds_a_paced_text_and_its_clock() {
+        // Ten characters at 600 WPM: 20 ms each, 200 ms in all.
+        let pace = NonZeroU32::new(600).unwrap();
+        for (view, passed) in [(View::Slide, 2), (View::Blink, 2)] {
+            let mut t = test(&[true]).paced(pace, view);
+            let t0 = Instant::now();
+            t.apply(Input::Pause, t0);
+            assert!(!t.paused(), "nothing to hold yet");
+            t.apply(Input::Next, t0);
+            t.apply(Input::Pause, t0 + MS * 90);
+            assert!(t.paused());
+            let at = |t: &ReadTest, ms| {
+                let now = t0 + MS * ms;
+                (t.slid(now), t.blinked(now))
+            };
+            assert_eq!(at(&t, 90), at(&t, 5000), "held");
+            t.tick(t0 + MS * 5000);
+            assert_eq!(t.stage(), Stage::Reading, "its clock too");
+            t.apply(Input::Pause, t0 + MS * 5000);
+            assert!(!t.paused());
+            assert_eq!(at(&t, 5010), (5, 2), "100 ms in");
+            t.tick(t0 + MS * 5109);
+            assert_eq!(t.stage(), Stage::Reading);
+            t.tick(t0 + MS * 5110);
+            assert_eq!(t.stage(), Stage::Probing);
+            assert_eq!(t.turns, [Turn(0, passed, 90), Turn(passed, 5, 110)]);
+            t.apply(Input::Yes, t0 + MS * 5200);
+            let record = t.record("t".into(), Origin::default(), (80, 24));
+            assert_eq!((record.elapsed_ms, record.wpm), (200, 600.0));
+        }
+        let mut paged = test(&[true]);
+        paged.apply(Input::Next, Instant::now());
+        paged.apply(Input::Pause, Instant::now());
+        assert!(!paged.paused() && paged.turns.is_empty(), "pages wait");
     }
 
     #[test]

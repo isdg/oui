@@ -28,6 +28,7 @@ USE
     > oui -m t:c -P             # the same, lowercase and unpunctuated
     > oui -m text:external      # a passage of external texts (see below)
     > oui -m funny              # words that follow each other as in prose
+    > oui -m funny -P           # the same, lowercase and unpunctuated
     > oui -m n2                 # the language's bigrams, one a word
     > oui -p                    # words that drill your costliest bigrams
     > oui -t 60                 # a timed test of 60 seconds
@@ -45,8 +46,8 @@ Flags:
                       text:classics (or t:c): the bundled classics only;
                       text:external (or t:e): the external texts only;
                       funny (or funnywords): words that follow each other
-                      as they do in that prose, so phrases almost mean
-                      something;
+                      as they do in that prose, punctuation and all, so
+                      sentences almost mean something;
                       practice: see -p; ngrams: that prose's single
                       letters, one a word, each as often as it holds it,
                       and ngrams:N (or n:N, nN) its runs of N letters, so
@@ -59,9 +60,9 @@ Flags:
                       punctuation, numbers, capitals, symbols (or p, n, c,
                       s).
     -P, --plain       Type prose plain: lowercase, bare of punctuation and
-                      numbers, as -m funny types its words. For -m text,
-                      whichever texts, and a FILE; --plain=false overrides
-                      the config.
+                      numbers. For -m text, whichever texts, -m funny and
+                      a FILE; --plain=false overrides the config. -W
+                      extras go into funny mode only when it is plain.
     -w, --words       Words in the test: 50, the whole file, or one
                       passage.
     -t, --time        Make it a timed test of this many seconds.

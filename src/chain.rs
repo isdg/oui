@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 
 use fastrand::Rng;
 
-use crate::words::{bare, Passage};
+use crate::words::Passage;
 
-/// Which words follow which in a body of prose, lowercased and stripped
-/// of the punctuation around them.
+/// Which words follow which in a body of prose, each as the passages
+/// spell it: `--plain` ones walk bare words, others sentences as written.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Chain {
     words: Vec<String>,
@@ -30,7 +30,7 @@ impl Chain {
         let mut pairs: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
         for passage in passages {
             let mut walk = Vec::new();
-            for word in passage.words.iter().filter_map(|w| bare(w)) {
+            for word in passage.words.iter().cloned() {
                 let id = *ids.entry(word.clone()).or_insert_with(|| {
                     chain.words.push(word);
                     chain.next.push(Vec::new());
@@ -96,7 +96,18 @@ mod tests {
             .iter()
             .map(|t| Passage { words: words::split(t), cite: None })
             .collect();
-        Chain::new(&passages)
+        Chain::new(&words::plain(passages))
+    }
+
+    #[test]
+    fn words_walk_as_the_passages_spell_them() {
+        let text = "The cat sat. The dog sat, too.";
+        let passages = [Passage { words: words::split(text), cite: None }];
+        let c = Chain::new(&passages);
+        assert_eq!(c.words(), ["The", "cat", "sat.", "dog", "sat,", "too."]);
+        let walk = c.walk(40, &mut Rng::with_seed(1)).join(" ");
+        assert!(walk.starts_with("The "), "{walk}");
+        assert!(!walk.contains("sat. dog") && !walk.contains("sat, The"));
     }
 
     #[test]

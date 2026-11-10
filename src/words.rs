@@ -100,8 +100,9 @@ impl ValueEnum for Mode {
             Mode::Funny => (
                 "funny",
                 &["funnywords", "f"],
-                "Words that follow each other as in that prose: phrases \
-                 that almost mean something",
+                "Words that follow each other as in that prose, \
+                 punctuation and all: sentences that almost mean \
+                 something",
             ),
             Mode::Practice => (
                 "practice",
@@ -248,9 +249,8 @@ pub fn normalise(text: &str) -> String {
     text.chars().map(fold).collect::<String>().replace('…', "...")
 }
 
-/// A word as `--plain` and `--mode funny` type it: lowercase but for `I`,
-/// without the punctuation around it; `None` for numbers and lone
-/// punctuation.
+/// A word as `--plain` types it: lowercase but for `I`, without the
+/// punctuation around it; `None` for numbers and lone punctuation.
 pub fn bare(word: &str) -> Option<String> {
     let word = word.trim_matches(|c: char| !c.is_alphabetic());
     if word.is_empty() || word.chars().any(|c| c.is_numeric()) {

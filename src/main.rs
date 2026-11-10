@@ -156,7 +156,7 @@ struct TestArgs {
     )]
     with: Vec<Extra>,
     /// Type prose plain -- lowercase, bare of punctuation and numbers --
-    /// in --mode text and a FILE; --plain=false overrides ~/.ouirc.
+    /// in --mode text, funny and a FILE; --plain=false overrides ~/.ouirc.
     #[arg(
         short = 'P',
         long,
@@ -611,11 +611,10 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     }
     let from_config = cli.file.is_none();
     let mode = pick(cli.mode, config.mode, from_config);
+    let plain = pick(cli.plain, config.plain, from_config);
     let with = match cli.with.is_empty() {
         false => cli.with.clone(),
-        true if from_config && !mode.is_some_and(Mode::passages) => {
-            config.with.clone()
-        }
+        true if from_config && !written(mode, plain) => config.with.clone(),
         true => Vec::new(),
     };
     let (words, time) = match cli.words.is_some() || cli.time.is_some() {
@@ -632,11 +631,20 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         mode,
         practice: cli.practice,
         with,
-        plain: pick(cli.plain, config.plain, from_config),
+        plain,
         words,
         time,
         layout: cli.layout.or(config.layout),
         incognito: cli.incognito,
+    }
+}
+
+/// Whether `mode` types prose as written, punctuation and all, which
+/// takes no extras: passages always, funny mode unless it is plain.
+fn written(mode: Option<Mode>, plain: Option<bool>) -> bool {
+    match mode {
+        Some(Mode::Funny) => plain != Some(true),
+        mode => mode.is_some_and(Mode::passages),
     }
 }
 
@@ -646,6 +654,9 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     let limit = limit(cli, &source);
     if matches!(source, Source::Passages { .. }) && !cli.with.is_empty() {
         bail!("--with mixes extras into random words, not passages");
+    }
+    if written(cli.mode, cli.plain) && !cli.with.is_empty() {
+        bail!("--with mixes extras into bare words: add --plain to funny mode");
     }
     let mut extras = cli.with.clone();
     extras.sort();
@@ -663,7 +674,10 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     if !with.is_empty() {
         what = format!("{what} with {}", with.join(", "));
     }
-    let prose = matches!(source, Source::Text(_) | Source::Passages { .. });
+    let prose = matches!(
+        source,
+        Source::Text(_) | Source::Passages { .. } | Source::Funny(_)
+    );
     let plain = prose && cli.plain == Some(true);
     if plain {
         what.push_str(" plain");
@@ -767,7 +781,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         let texts = store.dir().join("texts");
         let mut passages = words::load_passages(&language, &texts)?;
         passages.extend(words::external(&language, &external)?);
-        if mode.passages() {
+        if mode.passages() || mode == Mode::Funny {
             passages = prose(passages);
         }
         if passages.is_empty() {
@@ -977,10 +991,41 @@ mod tests {
     }
 
     #[test]
-    fn funny_mode_walks_the_prose_and_takes_extras() {
-        let args = cli(&["-m", "funnywords", "-l", "russian", "-W", "p"]);
+    fn funny_mode_walks_the_prose_as_written() {
+        let args = cli(&["-m", "funnywords", "-l", "russian"]);
         let setup = setup(&args, &no_home()).unwrap();
-        assert_eq!(setup.title, "russian funny with punctuation · 50 words");
+        assert_eq!(setup.title, "russian funny · 50 words");
+        assert!(!setup.meta.plain);
+        let Source::Funny(chain) = &setup.source else { unreachable!() };
+        let passages = words::classics("russian");
+        let written: std::collections::HashSet<&String> =
+            passages.iter().flat_map(|p| &p.words).collect();
+        assert!(chain.words().iter().all(|w| written.contains(w)));
+        let ends = |w: &&String| w.ends_with(['.', ',']);
+        assert!(chain.words().iter().any(|w| ends(&w)), "punctuation stays");
+        let app = App::new(setup, None);
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words().len(), DEFAULT_WORDS);
+        assert!(session.words()[0].starts_with(char::is_uppercase));
+
+        let err = cli(&["-m", "funny", "-W", "p"]);
+        let err = super::setup(&err, &no_home()).err().unwrap().to_string();
+        assert!(err.starts_with("--with mixes extras into bare"), "{err}");
+        let config = oui::config::parse("mode = funny\nwith = p").unwrap();
+        assert!(merge(&cli(&[]), &config).with.is_empty());
+        let plain = merge(&cli(&["-P"]), &config);
+        assert_eq!(plain.with, [Extra::Punctuation]);
+    }
+
+    #[test]
+    fn plain_funny_mode_walks_bare_words_and_takes_extras() {
+        let args = cli(&["-m", "f", "-l", "russian", "-P", "-W", "p"]);
+        let setup = setup(&args, &no_home()).unwrap();
+        assert_eq!(
+            setup.title,
+            "russian funny with punctuation plain · 50 words"
+        );
+        assert!(setup.meta.plain);
         assert_eq!(setup.meta.mode, "funny");
         assert_eq!(setup.layout, Layout::Jcuken);
         let Source::Funny(chain) = &setup.source else { unreachable!() };
@@ -1089,7 +1134,7 @@ mod tests {
 
     #[test]
     fn plain_leaves_bare_modes_alone() {
-        for mode in ["words", "funny", "n2"] {
+        for mode in ["words", "n2"] {
             let plain = setup(&cli(&["-m", mode, "-P"]), &no_home()).unwrap();
             assert!(!plain.meta.plain && !plain.title.contains("plain"));
         }

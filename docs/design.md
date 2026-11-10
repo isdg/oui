@@ -138,14 +138,16 @@ gets ЙЦУКЕН and everything else QWERTY.
 and the user's: which words follow the two before them, where the prose
 goes on in more than one way, and else which follow the one before. The
 fallback keeps walks from retracing a passage, so phrases read like the
-language while sentences drift into nonsense. Words are lowercased and
-bare of punctuation, as in words mode, and take `--with` extras the same.
+language while sentences drift into nonsense. Words walk as the prose
+spells them, capitals and punctuation included, so a sentence's end is
+followed by a word that began one. With `--plain` the chain is built over
+bare words instead, as in words mode, and takes `--with` extras the same.
 
 ### Plain prose
 
-`--plain` strips text mode's passages and a `FILE` to the words funny mode
-types: lowercase but for `I`, bare of the punctuation around them, numbers
-and lone punctuation dropped. It strips at load, so passage lengths and
+`--plain` strips text mode's passages, the prose funny mode walks and a
+`FILE` to bare words: lowercase but for `I`, without the punctuation
+around them, numbers and lone punctuation dropped. It strips at load, so passage lengths and
 `-w` count what is typed; a passage left empty is dropped. Modes that are
 bare already ignore it, and history records `plain` only where it applied.
 

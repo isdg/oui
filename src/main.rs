@@ -27,6 +27,7 @@ use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
 use oui::ui;
+use oui::ui::reader::{Reading, Scroll};
 use oui::ui::results::Keys;
 use oui::words::{self, Mode, ModeParser, Source, Texts};
 
@@ -198,6 +199,8 @@ enum Screen {
         session: Session,
         /// How far the text is scrolled while shown instead of the results.
         review: Option<usize>,
+        /// Where the work is scrolled to while read instead of the results.
+        reader: Option<Scroll>,
     },
 }
 
@@ -228,6 +231,33 @@ impl Feed {
         let words = self.source.take(from, n, &mut self.rng);
         self.drawn += words.len();
         self.decorator.apply(words, &mut self.rng)
+    }
+
+    /// The work the last test of the source was in, and the reader's
+    /// place in it: all of it is behind once typing went on elsewhere.
+    fn reading(&self) -> Reading<'_> {
+        let words = self.source.words();
+        let work = self.source.work(self.start);
+        let next = self.resume.map(|at| at % words.len().max(1));
+        let within = |at: &usize| work.iter().any(|p| p.contains(at));
+        let place = match next.filter(within) {
+            Some(at) => work.iter().take_while(|p| p.end <= at).count(),
+            None => work.len(),
+        };
+        let passages = work.into_iter().map(|p| &words[p]).collect();
+        Reading { passages, place }
+    }
+
+    /// Where the reader opens: on the place, else on the passage typed.
+    fn opening(&self) -> Scroll {
+        let reading = self.reading();
+        let work = self.source.work(self.start);
+        let typed = work.iter().position(|p| p.contains(&self.start));
+        let passage = match reading.place < reading.passages.len() {
+            true => reading.place,
+            false => typed.unwrap_or(0),
+        };
+        Scroll { passage, row: 0 }
     }
 
     /// Where the passage a test started on is from; drills cite nothing.
@@ -304,8 +334,13 @@ impl App {
         app
     }
 
+    /// A new test: of another work, or the drill again, which keeps the
+    /// source's place.
     fn restart(&mut self) {
-        let start = self.feed.source.start(&mut self.feed.rng);
+        let start = match self.feed.drill.is_empty() {
+            true => self.feed.source.start(&mut self.feed.rng),
+            false => self.feed.start,
+        };
         self.begin(start);
     }
 
@@ -374,6 +409,7 @@ impl App {
                 measure: Measure::default(),
                 session: session.clone(),
                 review: None,
+                reader: None,
             };
         }
     }
@@ -393,6 +429,12 @@ impl App {
         match done {
             Ok(()) => (*kept, self.notice) = (!*kept, None),
             Err(e) => self.notice = Some(format!("history: {e:#}")),
+        }
+    }
+
+    fn close_reader(&mut self) {
+        if let Screen::Results { reader, .. } = &mut self.screen {
+            *reader = None;
         }
     }
 
@@ -428,12 +470,32 @@ impl App {
                 }
                 self.tick(now);
             }
-            Screen::Results { measure, session, review, .. } => {
+            Screen::Results { reader: Some(scroll), .. } => match key.code {
+                KeyCode::Char('q') => return false,
+                KeyCode::Char('O') | KeyCode::Esc => {
+                    self.close_reader();
+                }
+                KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.down(),
+                KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.up(),
+                KeyCode::Enter => {
+                    let work = self.feed.source.work(self.feed.start);
+                    if let Some(passage) = work.get(scroll.passage) {
+                        self.feed.drill.clear();
+                        self.begin(passage.start);
+                    }
+                }
+                _ => {}
+            },
+            Screen::Results { measure, session, review, reader, .. } => {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return false,
                     KeyCode::Char('i') => self.toggle_recorded(),
                     KeyCode::Char('o') => {
                         *review = if review.is_some() { None } else { Some(0) };
+                    }
+                    KeyCode::Char('O') => {
+                        let readable = !self.feed.reading().passages.is_empty();
+                        *reader = readable.then(|| self.feed.opening());
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if let Some(row) = review {
@@ -476,6 +538,11 @@ impl App {
             Screen::Typing(session) => {
                 ui::typing::draw(frame, session, now, &title, cite)
             }
+            Screen::Results { reader: Some(scroll), .. } => {
+                let reading = self.feed.reading();
+                *scroll =
+                    ui::reader::draw(frame, &reading, &title, cite, *scroll);
+            }
             Screen::Results { session, review: Some(row), .. } => {
                 *row = ui::review::draw(frame, session, &title, cite, *row);
             }
@@ -485,6 +552,7 @@ impl App {
                 let keys = Keys {
                     resume: self.feed.resume.is_some(),
                     incognito: self.record.as_ref().map(|(_, kept)| *kept),
+                    read: !self.feed.reading().passages.is_empty(),
                 };
                 let title = match cite {
                     Some(cite) => format!("{title} · {cite}"),
@@ -1596,6 +1664,95 @@ mod tests {
         type_out(&mut app, "kl");
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(typing(&app), ["ab", "cd"], "wrapping to the first");
+    }
+
+    #[test]
+    fn shift_o_reads_the_work_and_enter_types_from_the_marked_passage() {
+        let passage = |text: &str, cite: &str| words::Passage {
+            words: words::split(text),
+            cite: Some(cite.into()),
+        };
+        let source = Source::passages(vec![
+            passage("zz", "W"),
+            passage("ab cd", "X"),
+            passage("ef gh ij", "X"),
+            passage("kl", "X"),
+            passage("mn", "Y"),
+        ]);
+        let mut app = App::new(test_setup(source, Limit::Passage), None);
+        let type_out = |app: &mut App, keys: &str| {
+            for c in keys.chars() {
+                press(app, KeyCode::Char(c));
+            }
+        };
+        let reader = |app: &App| match &app.screen {
+            Screen::Results { reader, .. } => *reader,
+            Screen::Typing(_) => None,
+        };
+        let at = |passage| Some(Scroll { passage, row: 0 });
+        app.begin(1);
+        type_out(&mut app, "ab cd");
+        press(&mut app, KeyCode::Char('O'));
+        assert_eq!(reader(&app), at(1), "opens on the next passage");
+        let reading = app.feed.reading();
+        let texts: Vec<String> =
+            reading.passages.iter().map(|p| p.join(" ")).collect();
+        assert_eq!(texts, ["ab cd", "ef gh ij", "kl"], "the work cited X");
+        assert_eq!(reading.place, 1, "the first is behind");
+
+        use ratatui::backend;
+        let mut terminal =
+            ratatui::Terminal::new(backend::TestBackend::new(60, 12)).unwrap();
+        for _ in 0..2 {
+            press(&mut app, KeyCode::Down);
+            terminal.draw(|f| app.draw(f, Instant::now())).unwrap();
+        }
+        assert_eq!(reader(&app), at(2), "a row and a blank further");
+        assert!(press(&mut app, KeyCode::Esc), "esc closes, not quits");
+        assert_eq!(reader(&app), None);
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('k'));
+        terminal.draw(|f| app.draw(f, Instant::now())).unwrap();
+        press(&mut app, KeyCode::Enter);
+        let Screen::Typing(session) = &app.screen else { unreachable!() };
+        assert_eq!(session.words(), ["ab", "cd"], "back on the first");
+
+        type_out(&mut app, "ab cd");
+        press(&mut app, KeyCode::Char('c'));
+        type_out(&mut app, "ef gh ij");
+        press(&mut app, KeyCode::Char('c'));
+        type_out(&mut app, "kl");
+        assert_eq!(app.feed.reading().place, 3, "all of it is behind");
+        app.feed.drill = vec![('a', 'b')];
+        app.restart();
+        type_out(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('O'));
+        assert_eq!(reader(&app), at(2), "a drill keeps the work, on kl");
+        press(&mut app, KeyCode::Char('O'));
+        assert_eq!(reader(&app), None);
+    }
+
+    #[test]
+    fn shift_o_reads_a_file_but_not_random_words() {
+        let mut app = app("ab cd ef", Limit::Words(2));
+        for c in "ab cd".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let reading = app.feed.reading();
+        assert_eq!(reading.passages, [["ab", "cd", "ef"]]);
+        assert_eq!(reading.place, 0, "typing stopped inside it");
+
+        let random = Source::Random(words::split("ab"));
+        let mut app = App::new(test_setup(random, Limit::Words(1)), None);
+        for c in "ab".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Char('O'));
+        let Screen::Results { reader, .. } = &app.screen else {
+            unreachable!()
+        };
+        assert_eq!(*reader, None);
     }
 
     #[test]

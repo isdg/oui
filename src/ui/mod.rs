@@ -1,6 +1,7 @@
 //! The screens, as render functions over plain data so each one can be drawn
 //! into a test buffer.
 
+pub mod reader;
 pub mod results;
 pub mod review;
 pub mod typing;

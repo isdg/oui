@@ -5,6 +5,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -425,6 +426,25 @@ impl Source {
         holds.then(|| starts.partition_point(|&s| s <= at) - 1)
     }
 
+    /// The passages of the work holding word `at`, in order, each as its
+    /// range of words: those around it under its citation. A text is one.
+    pub fn work(&self, at: usize) -> Vec<Range<usize>> {
+        let (words, starts, cites) = match self {
+            Source::Text(words) if !words.is_empty() => {
+                return std::iter::once(0..words.len()).collect()
+            }
+            Source::Passages { words, starts, cites } => (words, starts, cites),
+            _ => return Vec::new(),
+        };
+        let Some(held) = self.passage(at) else { return Vec::new() };
+        let same = |i: usize| cites[i].is_some() && cites[i] == cites[held];
+        let first = (0..held).rev().take_while(|&i| same(i)).last();
+        let last = (held + 1..starts.len()).take_while(|&i| same(i)).last();
+        let passages = first.unwrap_or(held)..=last.unwrap_or(held);
+        let end = |i: usize| *starts.get(i + 1).unwrap_or(&words.len());
+        passages.map(|i| starts[i]..end(i)).collect()
+    }
+
     /// Words from word `at` to the end of its passage.
     pub fn passage_len(&self, at: usize) -> Option<usize> {
         let Source::Passages { words, starts, .. } = self else {
@@ -767,6 +787,18 @@ mod tests {
         let starts: BTreeSet<usize> =
             (0..200).map(|_| source.start(&mut rng)).collect();
         assert_eq!(starts, BTreeSet::from([0, 2, 3, 4, 6]));
+        let work = |source: &Source, at| {
+            let spans = source.work(at).into_iter().map(|p| (p.start, p.end));
+            spans.collect::<Vec<_>>()
+        };
+        assert_eq!(work(&source, 1), [(0, 1), (1, 2)], "those cited X");
+        assert_eq!(work(&source, 2), [(2, 3)], "an uncited one is its own");
+        assert_eq!(work(&source, 4), [(4, 5), (5, 6)]);
+        assert_eq!(work(&source, 5), [(4, 5), (5, 6)]);
+        assert_eq!(work(&source, 6), [(6, 7)], "not the X before Y");
+        assert!(work(&source, 7).is_empty());
+        assert_eq!(work(&Source::Text(owned(&["a", "b"])), 9), [(0, 2)]);
+        assert!(work(&Source::Random(owned(&["a"])), 0).is_empty());
         assert!(source.ordered() && Source::Text(owned(&["a"])).ordered());
         assert!(!Source::Random(owned(&["a"])).ordered());
         assert_eq!(Source::passages(vec![]).start(&mut rng), 0);

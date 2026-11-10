@@ -98,6 +98,10 @@ again puts it back -- and q quits. For a text or a file, c continues it:
 the next test starts where this one stopped, so a text can be read through
 passage by passage. A new text test starts a work from its first passage.
 
+O opens that work to read: its passages in order, the ones behind your
+place dimmed, with up/down to scroll. The passage at the top is marked, and
+enter starts typing from it; O or esc goes back to the results.
+
 A drill draws words in proportion to how many of your weakest bigrams they
 contain -- the three most missed and the three slowest over your last 20
 tests of that language -- and keeps drilling on tab until you press r.

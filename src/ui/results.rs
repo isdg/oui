@@ -25,6 +25,8 @@ pub struct Keys {
     /// `i` takes the test out of the history if it is in it (`true`), or
     /// puts it back.
     pub incognito: Option<bool>,
+    /// `O` opens the work to read.
+    pub read: bool,
 }
 
 pub fn draw(
@@ -79,9 +81,10 @@ pub fn draw(
         Some(false) => "i record · ",
         None => "",
     };
+    let read = if offered.read { "O read · " } else { "" };
     let keys = format!(
         " r new test · {go_on}p drill · tab errors/speed · o text · \
-         {incognito}q quit"
+         {read}{incognito}q quit"
     );
     frame.render_widget(Line::from(keys).dim(), footer);
     if let Some(notice) = notice {
@@ -274,10 +277,11 @@ mod tests {
             });
             rows.join("\n")
         };
-        let all = draw(Keys { resume: true, incognito: Some(true) });
+        let all =
+            draw(Keys { resume: true, incognito: Some(true), read: true });
         assert!(all.contains("r new test · c continue · p drill"), "{all}");
-        assert!(all.contains("o text · i incognito · q quit"), "{all}");
-        let out = draw(Keys { resume: false, incognito: Some(false) });
+        assert!(all.contains("o text · O read · i incognito · q quit"));
+        let out = draw(Keys { incognito: Some(false), ..Keys::default() });
         assert!(out.contains("o text · i record · q quit"), "{out}");
         let screen = draw(Keys::default());
         assert!(!screen.contains("continue"), "{screen}");

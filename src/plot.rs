@@ -31,6 +31,7 @@ pub fn line_chart_from(
     let hi = hi.max(lo + 1);
     let range = hi - lo;
     let span = height as u64 - 1;
+    let ticks = ticks(lo, hi, height);
     let label_width = fmt(hi).chars().count().max(fmt(lo).chars().count());
 
     // Row (0 = top) each column's point lands on.
@@ -62,9 +63,8 @@ pub fn line_chart_from(
 
     let mut lines = Vec::with_capacity(height + 1);
     for (r, gridrow) in grid.iter().enumerate() {
-        let val = lo + range * (span - r as u64) / span;
         let sep = if r == 0 { '┼' } else { '┤' };
-        let mut line = format!("{:>label_width$} {sep}", fmt(val));
+        let mut line = format!("{:>label_width$} {sep}", fmt(ticks[r]));
         line.extend(gridrow);
         lines.push(line);
     }
@@ -72,6 +72,15 @@ pub fn line_chart_from(
     bottom.extend(std::iter::repeat_n('─', width));
     lines.push(bottom);
     lines
+}
+
+/// The y-axis value of each line [`line_chart_from`] draws over `lo..=hi`,
+/// top row first, the bottom rule's `lo` last.
+pub fn ticks(lo: u64, hi: u64, height: usize) -> Vec<u64> {
+    let range = hi.max(lo + 1) - lo;
+    let span = (height as u64).saturating_sub(1).max(1);
+    let rows = (0..height as u64).map(|r| lo + range * (span - r) / span);
+    rows.chain([lo]).collect()
 }
 
 /// Average `values` down into at most `width` columns.
@@ -162,6 +171,8 @@ mod tests {
         let lines = line_chart_from(70, 90, 3, &[70, 80, 90], &plain);
         assert_eq!(lines, ["90 ┼  ╭", "80 ┤ ╭╯", "70 ┤●╯ ", "70 └───"]);
         assert_eq!(line_chart_from(50, 50, 2, &[40], &plain)[1], "50 ┤●");
+        assert_eq!(ticks(70, 90, 3), [90, 80, 70, 70]);
+        assert_eq!(ticks(50, 50, 2), [51, 50, 50]);
     }
 
     #[test]

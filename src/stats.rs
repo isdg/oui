@@ -13,6 +13,8 @@ pub const PAUSE: Duration = Duration::from_secs(2);
 pub const WINDOW: Duration = Duration::from_secs(5);
 /// Fewer timed samples than this make a bigram's mean latency noise.
 pub const MIN_TIMED: u32 = 2;
+/// Characters a word of WPM stands for, so CPM is this many times a WPM.
+pub const CHARS_PER_WORD: f64 = 5.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Tally {
@@ -283,7 +285,7 @@ pub fn wpm(chars: usize, elapsed: Duration) -> f64 {
     if minutes == 0.0 {
         return 0.0;
     }
-    chars as f64 / 5.0 / minutes
+    chars as f64 / CHARS_PER_WORD / minutes
 }
 
 pub fn accuracy(log: &[Keystroke]) -> f64 {

@@ -14,7 +14,7 @@ use crate::history::Record;
 use crate::keyboard::{self, Key, Layout, Measure};
 use crate::plot;
 use crate::practice::Target;
-use crate::stats::{self, Report, Rhythm, Tally};
+use crate::stats::{self, Report, Rhythm, Tally, CHARS_PER_WORD};
 use crate::ui::{results, show};
 
 /// Widest the per-test plot grows before neighbouring tests are averaged.
@@ -61,31 +61,6 @@ impl Period {
     }
 }
 
-/// The unit speeds are shown in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Speed {
-    #[default]
-    Wpm,
-    /// Characters a minute: five to the word of a recorded WPM.
-    Cpm,
-}
-
-impl Speed {
-    fn of(self, wpm: f64) -> f64 {
-        match self {
-            Speed::Wpm => wpm,
-            Speed::Cpm => wpm * 5.0,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Speed::Wpm => "wpm",
-            Speed::Cpm => "cpm",
-        }
-    }
-}
-
 /// What `oui stats` shows beyond the summary, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct View {
@@ -95,8 +70,6 @@ pub struct View {
     pub colour: bool,
     /// Adds a table of periods and plots WPM per period, not per test.
     pub by: Option<Period>,
-    /// The unit of every speed, plots included.
-    pub speed: Speed,
     /// Adds the heatmaps and the key and bigram rankings.
     pub detailed: bool,
     /// Adds the fingers, rows and hand moves.
@@ -107,9 +80,8 @@ pub struct View {
 pub fn render(records: &[Record], view: &View) -> String {
     let reports: Vec<Report> = records.iter().map(Record::report).collect();
     let all = stats::combine(&reports);
-    let speed = view.speed;
-    let completed = records.iter().filter(|r| r.completed);
-    let wpms: Vec<f64> = completed.map(|r| speed.of(r.wpm)).collect();
+    let wpms: Vec<f64> =
+        records.iter().filter(|r| r.completed).map(|r| r.wpm).collect();
 
     let mut out = String::new();
     out.push_str("\n     ── History ─────────────────────────\n");
@@ -130,9 +102,14 @@ pub fn render(records: &[Record], view: &View) -> String {
         let best = wpms.iter().copied().fold(0.0, f64::max);
         let _ = writeln!(
             out,
-            "     {}          : {mean:.0} mean · {best:.0} best · \
-             {recent:.0} last 10",
-            speed.name().to_uppercase()
+            "     WPM          : {mean:.0} mean · {best:.0} best · \
+             {recent:.0} last 10"
+        );
+        let cpm = [mean, best, recent].map(|wpm| wpm * CHARS_PER_WORD);
+        let _ = writeln!(
+            out,
+            "     CPM          : {:.0} mean · {:.0} best · {:.0} last 10",
+            cpm[0], cpm[1], cpm[2]
         );
     }
     let _ = writeln!(
@@ -154,24 +131,21 @@ pub fn render(records: &[Record], view: &View) -> String {
                 .map(|r| vec![r.meta.mode.as_str()])
                 .collect();
             let modes = view.colour.then_some(modes.as_slice());
-            let title = "per completed test";
-            out.push_str(&wpm_plot(speed, title, &wpms, modes));
+            out.push_str(&wpm_plot("per completed test", &wpms, modes));
         }
         Some(period) => {
             let groups = group(records, period);
-            out.push_str(&period_table(&groups, period, speed));
+            out.push_str(&period_table(&groups, period));
             let (means, modes): (Vec<f64>, Vec<Vec<&str>>) = groups
                 .iter()
-                .filter_map(|(_, g)| {
-                    Some((speed.of(completed_mean(g)?), modes(g)))
-                })
+                .filter_map(|(_, g)| Some((completed_mean(g)?, modes(g))))
                 .unzip();
             let modes = view.colour.then_some(modes.as_slice());
             let title = format!("mean per {}", period.name());
-            out.push_str(&wpm_plot(speed, &title, &means, modes));
+            out.push_str(&wpm_plot(&title, &means, modes));
         }
     }
-    out.push_str(&recent_texts(records, speed));
+    out.push_str(&recent_texts(records));
     if view.detailed {
         out.push_str(&details(&all, view));
     }
@@ -206,15 +180,14 @@ fn details(all: &Report, view: &View) -> String {
 
 /// What the latest text-mode tests typed, by their citations; empty when
 /// no test was cited.
-fn recent_texts(records: &[Record], speed: Speed) -> String {
+fn recent_texts(records: &[Record]) -> String {
     let cited = records.iter().rev().filter_map(|r| {
         let cite = r.meta.cite.as_deref()?;
         let stopped = if r.completed { "" } else { "  (stopped)" };
         Some(format!(
-            "     {}  {:>4.0} {}  {:>5.1}%  {cite}{stopped}",
+            "     {}  {:>4.0} wpm  {:>5.1}%  {cite}{stopped}",
             day(&r.at),
-            speed.of(r.wpm),
-            speed.name(),
+            r.wpm,
             r.accuracy * 100.0
         ))
     });
@@ -431,25 +404,17 @@ fn group(records: &[Record], period: Period) -> Vec<(String, Vec<&Record>)> {
     groups.into_iter().collect()
 }
 
-fn period_table(
-    groups: &[(String, Vec<&Record>)],
-    period: Period,
-    speed: Speed,
-) -> String {
+fn period_table(groups: &[(String, Vec<&Record>)], period: Period) -> String {
     let mut out = format!("\n     ── By {} ", period.name());
     out.push_str(&"─".repeat(40 - out.chars().count().min(40) + 5));
     out.push('\n');
     let name = capitalise(period.name());
-    let unit = speed.name().to_uppercase();
-    let _ = writeln!(
-        out,
-        "     {name:<10}  Tests      Time   {unit}  Best  Accuracy"
-    );
+    let _ =
+        writeln!(out, "     {name:<10}  Tests      Time   WPM  Best  Accuracy");
     for (key, records) in groups {
         let ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
         let time = hms(Duration::from_millis(ms));
-        let wpms: Vec<f64> =
-            completed(records).map(|wpm| speed.of(wpm)).collect();
+        let wpms: Vec<f64> = completed(records).collect();
         let (wpm, best) = match wpms.is_empty() {
             true => ("—".to_string(), "—".to_string()),
             false => {
@@ -491,16 +456,11 @@ fn capitalise(word: &str) -> String {
         .map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
 }
 
-/// The trend of speeds in `speed`; with `modes`, the tests behind each
-/// value, every column is drawn in the colour of the mode most of its
-/// tests were in.
-fn wpm_plot(
-    speed: Speed,
-    title: &str,
-    wpms: &[f64],
-    modes: Option<&[Vec<&str>]>,
-) -> String {
-    let mut out = format!("\n          {} — {title}\n\n", speed.name());
+/// The WPM trend, with the same scale in CPM down its right side; with
+/// `modes`, the tests behind each value, every column is drawn in the
+/// colour of the mode most of its tests were in.
+fn wpm_plot(title: &str, wpms: &[f64], modes: Option<&[Vec<&str>]>) -> String {
+    let mut out = format!("\n          wpm · cpm at right — {title}\n\n");
     if wpms.is_empty() {
         out.push_str("          (no data)\n");
         return out;
@@ -521,12 +481,19 @@ fn wpm_plot(
     let columns: Vec<Option<u8>> =
         shown.iter().map(|m| Some(mode_colour(m))).collect();
     let lines = plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt);
-    for (row, line) in lines.iter().enumerate() {
+    let ticks = plot::ticks(lo, max, PLOT_ROWS);
+    for (row, (line, wpm)) in lines.iter().zip(ticks).enumerate() {
         let line = match row < PLOT_ROWS {
             true => plot::tint(line, label + 2, &columns),
             false => line.clone(),
         };
-        let _ = writeln!(out, "     {line}");
+        let sep = match row {
+            0 => '┼',
+            PLOT_ROWS => '┘',
+            _ => '├',
+        };
+        let cpm = wpm * CHARS_PER_WORD as u64;
+        let _ = writeln!(out, "     {line}{sep} {cpm}");
     }
     let per_col = wpms.len() as f64 / values.len() as f64;
     let axis = plot::axis(label + 2, values.len(), per_col);
@@ -689,7 +656,7 @@ mod tests {
         assert!(out.contains("Tests        : 2   (1 completed)"), "{out}");
         assert!(out.contains("First / last : 2026-10-23 / 2026-10-24"));
         assert!(out.contains("Accuracy     : 85.7%  (6/7 keys)"));
-        assert!(out.contains("wpm — per completed test"));
+        assert!(out.contains("wpm · cpm at right — per completed test"));
         assert!(!out.contains("keyboard —") && !out.contains("Worst keys"));
         assert!(!out.contains("── Fingers"));
         let out = render(&records, &detailed());
@@ -807,32 +774,29 @@ mod tests {
         assert!(out.contains("2026-W42"), "{out}");
         let row = out.lines().find(|l| l.starts_with("     2026-W43")).unwrap();
         assert!(row.contains("    2  ") && row.ends_with("85.7%"), "{row}");
-        assert!(out.contains("wpm — mean per week"));
+        assert!(out.contains("wpm · cpm at right — mean per week"));
         assert!(!out.contains("per completed test"));
     }
 
     #[test]
-    fn cpm_shows_every_speed_as_five_times_its_wpm() {
-        let mut cited = record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00");
-        cited.meta.cite = Some("Austen, Emma".into());
-        let cpm = format!("{:.0}", cited.wpm * 5.0);
-        let view = View { speed: Speed::Cpm, ..summary() };
-        let records = [cited];
-        let out = render(&records, &view);
-        let all =
-            format!("CPM          : {cpm} mean · {cpm} best · {cpm} last");
-        assert!(out.contains(&all), "{out}");
-        assert!(out.contains("cpm — per completed test"), "{out}");
-        assert!(out.contains(&format!("{cpm} cpm  100.0%  Austen, Emma")));
-        let view = View { by: Some(Period::Week), ..view };
-        let out = render(&records, &view);
-        assert!(
-            out.contains("Week        Tests      Time   CPM  Best  Accuracy")
-        );
-        let row = out.lines().find(|l| l.starts_with("     2026-W42")).unwrap();
-        assert!(row.contains(&format!("{cpm:>4}  {cpm:>4}")), "{row}");
-        assert!(out.contains("cpm — mean per week"), "{out}");
-        assert!(!out.to_lowercase().contains("wpm"), "{out}");
+    fn cpm_is_shown_beside_wpm_as_five_times_it() {
+        let records = [record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00")];
+        let (wpm, cpm) = (records[0].wpm, records[0].wpm * 5.0);
+        let out = render(&records, &summary());
+        let line = |unit: &str, v: f64| {
+            format!("{unit}          : {v:.0} mean · {v:.0} best · ")
+        };
+        assert!(out.contains(&line("WPM", wpm)), "{out}");
+        assert!(out.contains(&line("CPM", cpm)), "{out}");
+        let plot: Vec<&str> =
+            out.lines().filter(|l| l.contains(['┤', '┼', '└'])).collect();
+        assert_eq!(plot.len(), PLOT_ROWS + 1, "{out}");
+        for row in plot {
+            let ends: Vec<&str> = row.split_whitespace().collect();
+            let wpm: u64 = ends[0].parse().unwrap();
+            let cpm: u64 = ends.last().unwrap().parse().unwrap();
+            assert_eq!(cpm, wpm * 5, "{row}");
+        }
     }
 
     #[test]
@@ -900,7 +864,7 @@ mod tests {
         ] {
             assert!(out.contains(needle), "missing {needle:?}\n{out}");
         }
-        assert!(out.contains("wpm — per completed test"));
+        assert!(out.contains("wpm · cpm at right — per completed test"));
         assert!(!out.contains("keyboard —") && !out.contains("Worst keys"));
         let both = View { geometry: true, ..detailed() };
         let out = render(&records, &both);

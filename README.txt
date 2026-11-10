@@ -142,7 +142,6 @@ what was. oui stats reads it back:
                                     # rankings
     > oui stats -n 20 -s russian    # the last 20 Russian tests
     > oui stats --by week           # a table of weeks, WPM plotted per week
-    > oui stats --cpm               # speeds in characters a minute: 5 x WPM
     > oui stats --geometry          # plus fingers, rows and hand moves
     > oui stats --practice          # plus what -p targets, and its words
 
@@ -150,7 +149,8 @@ what was. oui stats reads it back:
 time zone each test was taken in): tests, time typed, mean and best WPM and
 accuracy per period, with the plot showing the mean per period instead of
 every test. Its y-axis starts at the slowest value's ten, not at zero, so a
-trend of a few WPM stays visible.
+trend of a few WPM stays visible. The same scale runs down its right side
+in CPM, characters a minute: five to the word of WPM.
 
 Text-mode tests are recorded with their passage's citation, and oui stats
 lists the last ten under Recent texts: when, how fast, how accurate, and

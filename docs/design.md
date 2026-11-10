@@ -149,9 +149,10 @@ bare words instead, as in words mode, and takes `--with` extras the same.
 
 `--plain` strips text mode's passages, the prose funny mode walks and a
 `FILE` to bare words: lowercase but for `I`, without the punctuation
-around them, numbers and lone punctuation dropped. It strips at load, so passage lengths and
-`-w` count what is typed; a passage left empty is dropped. Modes that are
-bare already ignore it, and history records `plain` only where it applied.
+around them, numbers and lone punctuation dropped. It strips at load, so
+passage lengths and `-w` count what is typed; a passage left empty is
+dropped. Modes that are bare already ignore it, and history records `plain`
+only where it applied.
 
 ### Ngrams mode
 

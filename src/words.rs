@@ -219,6 +219,31 @@ pub fn normalise(text: &str) -> String {
     text.chars().map(fold).collect::<String>().replace('…', "...")
 }
 
+/// A word as `--plain` and `--mode funny` type it: lowercase but for `I`,
+/// without the punctuation around it; `None` for numbers and lone
+/// punctuation.
+pub fn bare(word: &str) -> Option<String> {
+    let word = word.trim_matches(|c: char| !c.is_alphabetic());
+    if word.is_empty() || word.chars().any(|c| c.is_numeric()) {
+        return None;
+    }
+    if word == "I" || word.starts_with("I'") {
+        return Some(word.to_string());
+    }
+    Some(word.to_lowercase())
+}
+
+/// `passages` as `--plain` types them: of [`bare`] words, those left with
+/// none dropped.
+pub fn plain(passages: Vec<Passage>) -> Vec<Passage> {
+    let strip = |p: Passage| {
+        let words: Vec<String> =
+            p.words.iter().filter_map(|w| bare(w)).collect();
+        (!words.is_empty()).then_some(Passage { words, cite: p.cite })
+    };
+    passages.into_iter().filter_map(strip).collect()
+}
+
 /// A passage of prose, and where it is from when its text says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Passage {
@@ -517,6 +542,29 @@ mod tests {
         let err = cmd.try_get_matches_from(["t", "--k", "c"]).unwrap_err();
         let err = with_letters(err).to_string();
         assert!(err.contains("[possible values: a, b]"), "{err}");
+    }
+
+    #[test]
+    fn bare_words_lose_case_and_surrounding_punctuation() {
+        assert_eq!(bare("«Hello,»").as_deref(), Some("hello"));
+        assert_eq!(bare("peut-être.").as_deref(), Some("peut-être"));
+        assert_eq!(bare("don't").as_deref(), Some("don't"));
+        assert_eq!(bare("I'm").as_deref(), Some("I'm"));
+        assert_eq!(bare("Ёлка!").as_deref(), Some("ёлка"));
+        assert_eq!((bare("—"), bare("1815,")), (None, None));
+    }
+
+    #[test]
+    fn plain_passages_keep_their_cites_and_drop_empty_ones() {
+        let text = "[[A, B]]\n«Hello,» said I - in 1815!\n\n1815. -\n\n\
+                    [[C]]\nPeut-être.";
+        assert_eq!(
+            plain(passages(text)),
+            [
+                cited(&["hello", "said", "I", "in"], "A, B"),
+                cited(&["peut-être"], "C"),
+            ]
+        );
     }
 
     #[test]

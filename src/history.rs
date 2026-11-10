@@ -45,6 +45,9 @@ pub struct Meta {
     pub mode: String,
     #[serde(default)]
     pub with: Vec<String>,
+    /// Prose typed `--plain`: lowercase, bare of punctuation and numbers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain: bool,
     pub layout: String,
     /// Where a text-mode passage is from, when its text cites it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +229,7 @@ mod tests {
             source: "english".into(),
             mode: "words".into(),
             with: vec![],
+            plain: false,
             layout: "qwerty".into(),
             cite: None,
         }

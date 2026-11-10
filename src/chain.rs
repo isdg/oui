@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use fastrand::Rng;
 
-use crate::words::Passage;
+use crate::words::{bare, Passage};
 
 /// Which words follow which in a body of prose, lowercased and stripped
 /// of the punctuation around them.
@@ -86,19 +86,6 @@ impl Chain {
     }
 }
 
-/// A word as `--mode funny` types it: lowercase but for `I`, without the
-/// punctuation around it; `None` for numbers and lone punctuation.
-fn bare(word: &str) -> Option<String> {
-    let word = word.trim_matches(|c: char| !c.is_alphabetic());
-    if word.is_empty() || word.chars().any(|c| c.is_numeric()) {
-        return None;
-    }
-    if word == "I" || word.starts_with("I'") {
-        return Some(word.to_string());
-    }
-    Some(word.to_lowercase())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,16 +97,6 @@ mod tests {
             .map(|t| Passage { words: words::split(t), cite: None })
             .collect();
         Chain::new(&passages)
-    }
-
-    #[test]
-    fn words_lose_case_and_surrounding_punctuation() {
-        assert_eq!(bare("«Hello,»").as_deref(), Some("hello"));
-        assert_eq!(bare("peut-être.").as_deref(), Some("peut-être"));
-        assert_eq!(bare("don't").as_deref(), Some("don't"));
-        assert_eq!(bare("I'm").as_deref(), Some("I'm"));
-        assert_eq!(bare("Ёлка!").as_deref(), Some("ёлка"));
-        assert_eq!((bare("—"), bare("1815,")), (None, None));
     }
 
     #[test]

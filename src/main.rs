@@ -53,6 +53,7 @@ Files:
                            mode     = words        # text, classics, ext, funny,
                                                    # practice, ngrams:2
                            with     = punctuation, numbers
+                           plain    = true         # as --plain
                            words    = 50           # or time = 60
                            layout   = auto         # or qwerty, jcuken
 Under $OUI_HOME, default ~/.oui:
@@ -153,6 +154,16 @@ struct TestArgs {
         conflicts_with = "file"
     )]
     with: Vec<Extra>,
+    /// Type prose plain -- lowercase, bare of punctuation and numbers --
+    /// in the passage modes and a FILE; --plain=false overrides ~/.ouirc.
+    #[arg(
+        short = 'P',
+        long,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    plain: Option<bool>,
     /// Number of words in the test (default 50, or the whole file).
     #[arg(short, long, conflicts_with = "time")]
     words: Option<NonZeroUsize>,
@@ -568,7 +579,7 @@ fn select(
 }
 
 /// The flags given, with the config filling in the rest. A FILE takes no
-/// language, mode or extras from the config, nor does text mode extras.
+/// language, mode, extras or plain from the config, nor text mode extras.
 fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
     fn pick<T>(
         flag: Option<T>,
@@ -600,6 +611,7 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         mode,
         practice: cli.practice,
         with,
+        plain: pick(cli.plain, config.plain, from_config),
         words,
         time,
         layout: cli.layout.or(config.layout),
@@ -630,6 +642,11 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
     if !with.is_empty() {
         what = format!("{what} with {}", with.join(", "));
     }
+    let prose = matches!(source, Source::Text(_) | Source::Passages { .. });
+    let plain = prose && cli.plain == Some(true);
+    if plain {
+        what.push_str(" plain");
+    }
     if !focus.is_empty() {
         let show =
             |&(a, b): &(char, char)| format!("{}{}", ui::show(a), ui::show(b));
@@ -649,6 +666,7 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
         source: name,
         mode,
         with,
+        plain,
         layout: layout.name().to_string(),
         cite: None,
     };
@@ -675,10 +693,18 @@ fn run(terminal: &mut DefaultTerminal, mut app: App) -> Result<()> {
 type Words = (Source, String, Vec<(char, char)>);
 
 fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
+    let plain = cli.plain == Some(true);
+    let prose = |passages| match plain {
+        true => words::plain(passages),
+        false => passages,
+    };
     if let Some(path) = &cli.file {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let words = words::split(&text);
+        let mut words = words::split(&text);
+        if plain {
+            words = words.iter().filter_map(|w| words::bare(w)).collect();
+        }
         if words.is_empty() {
             bail!("{} has no words to type", path.display());
         }
@@ -696,7 +722,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         return Ok((Source::Random(words), language, focus));
     }
     if cli.mode == Some(Mode::Classics) {
-        let passages = words::classics(&language);
+        let passages = prose(words::classics(&language));
         if passages.is_empty() {
             bail!("no classics for '{language}'");
         }
@@ -704,7 +730,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
     }
     let external = store.dir().join("external");
     if cli.mode == Some(Mode::External) {
-        let passages = words::external(&language, &external)?;
+        let passages = prose(words::external(&language, &external)?);
         if passages.is_empty() {
             bail!(
                 "no external texts for '{language}' in {} (extract them \
@@ -719,6 +745,9 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         let texts = store.dir().join("texts");
         let mut passages = words::load_passages(&language, &texts)?;
         passages.extend(words::external(&language, &external)?);
+        if mode == Mode::Text {
+            passages = prose(passages);
+        }
         if passages.is_empty() {
             let dir = texts.join(&language);
             bail!(
@@ -990,6 +1019,72 @@ mod tests {
     }
 
     #[test]
+    fn plain_strips_prose_and_names_the_test() {
+        let bare = |source: &Source| {
+            let plain = |w: &String| words::bare(w).as_ref() == Some(w);
+            source.words().iter().all(plain)
+        };
+        for mode in ["text", "classics"] {
+            let args = cli(&["-m", mode, "-l", "french", "--plain"]);
+            let setup = setup(&args, &no_home()).unwrap();
+            assert_eq!(
+                setup.title,
+                format!("french {mode} plain · one passage")
+            );
+            assert!(setup.meta.plain && bare(&setup.source), "{mode}");
+            let app = App::new(setup, None);
+            let Screen::Typing(session) = &app.screen else { unreachable!() };
+            let len = app.feed.source.passage_len(app.feed.start);
+            assert_eq!(Some(session.words().len()), len);
+            assert!(app.feed.cite().is_some(), "still cited");
+        }
+        let tmp = TempDir::new("plain");
+        let store = Store::at(&tmp.0);
+        fs::create_dir_all(tmp.0.join("external")).unwrap();
+        let ext = "One, two!\n\n1815.\n\n\"Three\" - four.\n";
+        fs::write(tmp.0.join("external/english.txt"), ext).unwrap();
+        let ext = setup(&cli(&["-m", "ext", "-P"]), &store).unwrap();
+        assert_eq!(ext.title, "english ext plain · one passage");
+        let Source::Passages { words, starts, .. } = &ext.source else {
+            unreachable!()
+        };
+        assert_eq!(words, &["one", "two", "three", "four"]);
+        assert_eq!(starts, &[0, 2], "the passage of numbers is gone");
+        fs::write(tmp.0.join("external/english.txt"), "1815.\n").unwrap();
+        let err = setup(&cli(&["-m", "ext", "-P"]), &store).err().unwrap();
+        assert!(err.to_string().starts_with("no external texts"), "{err}");
+
+        let file = tmp.0.join("notes.txt");
+        fs::write(&file, "Hello, World - 42!").unwrap();
+        let file = file.to_str().unwrap();
+        let notes = setup(&cli(&[file, "--plain"]), &store).unwrap();
+        assert_eq!(notes.title, "notes.txt plain · 2 words");
+        assert_eq!(notes.source.words(), ["hello", "world"]);
+        let raw = setup(&cli(&[file, "--plain=false"]), &store).unwrap();
+        assert_eq!(raw.title, "notes.txt · 4 words");
+        assert!(!raw.meta.plain);
+    }
+
+    #[test]
+    fn plain_leaves_bare_modes_alone() {
+        for mode in ["words", "funny", "n2"] {
+            let plain = setup(&cli(&["-m", mode, "-P"]), &no_home()).unwrap();
+            assert!(!plain.meta.plain && !plain.title.contains("plain"));
+        }
+    }
+
+    #[test]
+    fn plain_comes_from_the_config_unless_a_flag_or_file_says() {
+        let config = oui::config::parse("mode = classics\nplain = true");
+        let config = config.unwrap();
+        assert_eq!(merge(&cli(&[]), &config).plain, Some(true));
+        let off = merge(&cli(&["--plain=false"]), &config);
+        assert_eq!(off.plain, Some(false), "flags win");
+        assert_eq!(merge(&cli(&["notes.txt"]), &config).plain, None);
+        assert_eq!(cli(&["-P", "notes.txt"]).plain, Some(true));
+    }
+
+    #[test]
     fn classics_mode_types_only_the_bundled_passages() {
         let tmp = TempDir::new("classics");
         let store = Store::at(&tmp.0);
@@ -1109,6 +1204,7 @@ mod tests {
             "texts/<language>/",
             "external/",
             "with  ",
+            "plain  ",
         ] {
             assert!(help.contains(needle), "help lacks {needle:?}\n{help}");
         }

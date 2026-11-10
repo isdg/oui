@@ -18,6 +18,7 @@ pub struct Config {
     pub language: Option<String>,
     pub mode: Option<Mode>,
     pub with: Vec<Extra>,
+    pub plain: Option<bool>,
     pub words: Option<NonZeroUsize>,
     pub time: Option<NonZeroU64>,
     /// `None` also for `layout = auto`, which detects it from the words.
@@ -79,6 +80,12 @@ fn set(config: &mut Config, key: &str, value: &str) -> Result<()> {
                 value.split(',').map(str::trim).filter(|v| !v.is_empty());
             config.with = names.map(choice).collect::<Result<_>>()?;
         }
+        "plain" => {
+            let plain = value.parse();
+            let plain =
+                plain.map_err(|_| anyhow!("'{value}' is not true or false"));
+            config.plain = Some(plain?);
+        }
         "words" => config.words = Some(number(value)?),
         "time" => config.time = Some(number(value)?),
         "layout" if value == "auto" => config.layout = None,
@@ -113,6 +120,7 @@ mod tests {
             language = russian
             mode     = words
             with     = punctuation, n
+            plain    = true
             words    = 30
             layout   = jcuken
         ";
@@ -120,6 +128,7 @@ mod tests {
         assert_eq!(config.language.as_deref(), Some("russian"));
         assert_eq!(config.mode, Some(Mode::Words));
         assert_eq!(config.with, [Extra::Punctuation, Extra::Numbers]);
+        assert_eq!(config.plain, Some(true));
         assert_eq!(config.words, NonZeroUsize::new(30));
         assert_eq!(config.layout, Some(Layout::Jcuken));
     }
@@ -141,6 +150,7 @@ mod tests {
         assert_eq!(err("words = 0"), "line 1: '0' is not a positive number");
         assert!(err("mode = prose")
             .starts_with("line 1: 'prose' is not one of words, text"));
+        assert_eq!(err("plain = yes"), "line 1: 'yes' is not true or false");
         assert_eq!(err("words\n"), "line 1: expected `key = value`");
         assert_eq!(err("words = 5\ntime = 9"), "set words or time, not both");
     }

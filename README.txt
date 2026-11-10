@@ -25,6 +25,7 @@ USE
     > oui -W p,n                # with punctuation and numbers mixed in
     > oui -m text -l french     # a passage of real French prose
     > oui -m classics           # a passage of the bundled classics only
+    > oui -m classics -P        # the same, lowercase and unpunctuated
     > oui -m ext                # a passage of external texts (see below)
     > oui -m funny              # words that follow each other as in prose
     > oui -m n2                 # the language's bigrams, one a word
@@ -55,6 +56,10 @@ Flags:
     -W, --with        Extras for random words, comma-separated:
                       punctuation, numbers, capitals, symbols (or p, n, c,
                       s).
+    -P, --plain       Type prose plain: lowercase, bare of punctuation and
+                      numbers, as -m funny types its words. For -m text,
+                      classics, ext and a FILE; --plain=false overrides
+                      the config.
     -w, --words       Words in the test: 50, the whole file, or one
                       passage.
     -t, --time        Make it a timed test of this many seconds.
@@ -182,6 +187,7 @@ as plcrc; flags override it. Unknown keys are errors.
     language = russian
     mode     = words          # or text, classics, ext, funny
     with     = punctuation, numbers
+    plain    = true           # as --plain; a FILE ignores it
     words    = 50             # or time = 60
     layout   = auto           # or qwerty, jcuken
 

@@ -128,7 +128,7 @@ pub fn render(records: &[Record], view: &View) -> String {
             let modes: Vec<Vec<&str>> = records
                 .iter()
                 .filter(|r| r.completed)
-                .map(|r| vec![r.meta.mode.as_str()])
+                .map(|r| vec![shown(&r.meta.mode)])
                 .collect();
             let modes = view.colour.then_some(modes.as_slice());
             out.push_str(&wpm_plot("per completed test", &wpms, modes));
@@ -441,7 +441,7 @@ fn completed<'a>(records: &'a [&Record]) -> impl Iterator<Item = f64> + 'a {
 
 fn modes<'a>(records: &[&'a Record]) -> Vec<&'a str> {
     let completed = records.iter().filter(|r| r.completed);
-    completed.map(|r| r.meta.mode.as_str()).collect()
+    completed.map(|r| shown(&r.meta.mode)).collect()
 }
 
 fn completed_mean(records: &[&Record]) -> Option<f64> {
@@ -529,14 +529,21 @@ fn dominant<'a>(modes: &[&'a str]) -> &'a str {
     best
 }
 
+/// The mode a recorded one is shown as: `text` for passages of any texts.
+fn shown(mode: &str) -> &str {
+    match mode {
+        // What `text:classics` and `text:external` were recorded as before.
+        "classics" | "ext" | "feed" => "text",
+        m if m.starts_with("text:") => "text",
+        m => m,
+    }
+}
+
 /// A muted ANSI 256 colour per kind of test, so no mode outshouts another.
 fn mode_colour(mode: &str) -> u8 {
     match mode {
         "words" => 66,
         "text" => 101,
-        "classics" => 95,
-        // `feed` is what `ext` was recorded as before its rename.
-        "ext" | "feed" => 109,
         "funny" => 138,
         "practice" => 103,
         "file" => 65,
@@ -717,6 +724,11 @@ mod tests {
     fn the_commonest_mode_names_a_column() {
         assert_eq!(dominant(&["text", "words", "words"]), "words");
         assert_eq!(dominant(&["funny", "text"]), "funny", "ties go first");
+        for mode in ["text:classics", "text:external", "classics", "ext"] {
+            assert_eq!(shown(mode), "text", "{mode}");
+        }
+        assert_eq!(shown("feed"), "text", "as external was first recorded");
+        assert_eq!((shown("words"), shown("ngrams:2")), ("words", "ngrams:2"));
     }
 
     #[test]

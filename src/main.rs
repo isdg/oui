@@ -27,7 +27,7 @@ use oui::session::{Input, Session};
 use oui::stats::{self, Report};
 use oui::summary::{self, Period, View};
 use oui::ui;
-use oui::words::{self, Mode, ModeParser, Source};
+use oui::words::{self, Mode, ModeParser, Source, Texts};
 
 const DEFAULT_LANGUAGE: &str = "english";
 /// Words in a test when neither `--words` nor a file says otherwise.
@@ -50,8 +50,8 @@ Files:
   ~/.ouirc               defaults for any flag above, one `key = value` a
                          line; flags override them:
                            language = russian
-                           mode     = words        # text, classics, ext, funny,
-                                                   # practice, ngrams:2
+                           mode     = words        # text, text:classics,
+                                                   # funny, practice, ngrams:2
                            with     = punctuation, numbers
                            plain    = true         # as --plain
                            words    = 50           # or time = 60
@@ -64,7 +64,8 @@ Under $OUI_HOME, default ~/.oui:
                          after it
   external/<language>.txt
                          passages `oui external` extracts from an archive,
-                         for --mode ext and text; external/readme.txt
+                         for --mode text and text:external;
+                         external/readme.txt
                          lists the articles used";
 
 /// Typing test that shows which keys and bigrams slow you down.
@@ -155,7 +156,7 @@ struct TestArgs {
     )]
     with: Vec<Extra>,
     /// Type prose plain -- lowercase, bare of punctuation and numbers --
-    /// in the passage modes and a FILE; --plain=false overrides ~/.ouirc.
+    /// in --mode text and a FILE; --plain=false overrides ~/.ouirc.
     #[arg(
         short = 'P',
         long,
@@ -721,7 +722,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         let focus = targets.iter().take(FOCUS).map(|t| t.bigram).collect();
         return Ok((Source::Random(words), language, focus));
     }
-    if cli.mode == Some(Mode::Classics) {
+    if cli.mode == Some(Mode::Text(Texts::Classics)) {
         let passages = prose(words::classics(&language));
         if passages.is_empty() {
             bail!("no classics for '{language}'");
@@ -729,7 +730,7 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         return Ok((Source::passages(passages), language, Vec::new()));
     }
     let external = store.dir().join("external");
-    if cli.mode == Some(Mode::External) {
+    if cli.mode == Some(Mode::Text(Texts::External)) {
         let passages = prose(words::external(&language, &external)?);
         if passages.is_empty() {
             bail!(
@@ -740,12 +741,13 @@ fn source(cli: &TestArgs, store: &Store) -> Result<Words> {
         }
         return Ok((Source::passages(passages), language, Vec::new()));
     }
-    if let Some(mode @ (Mode::Text | Mode::Funny | Mode::Ngrams(_))) = cli.mode
+    if let Some(mode @ (Mode::Text(_) | Mode::Funny | Mode::Ngrams(_))) =
+        cli.mode
     {
         let texts = store.dir().join("texts");
         let mut passages = words::load_passages(&language, &texts)?;
         passages.extend(words::external(&language, &external)?);
-        if mode == Mode::Text {
+        if mode.passages() {
             passages = prose(passages);
         }
         if passages.is_empty() {
@@ -1024,7 +1026,7 @@ mod tests {
             let plain = |w: &String| words::bare(w).as_ref() == Some(w);
             source.words().iter().all(plain)
         };
-        for mode in ["text", "classics"] {
+        for mode in ["text", "text:classics"] {
             let args = cli(&["-m", mode, "-l", "french", "--plain"]);
             let setup = setup(&args, &no_home()).unwrap();
             assert_eq!(
@@ -1043,15 +1045,15 @@ mod tests {
         fs::create_dir_all(tmp.0.join("external")).unwrap();
         let ext = "One, two!\n\n1815.\n\n\"Three\" - four.\n";
         fs::write(tmp.0.join("external/english.txt"), ext).unwrap();
-        let ext = setup(&cli(&["-m", "ext", "-P"]), &store).unwrap();
-        assert_eq!(ext.title, "english ext plain · one passage");
+        let ext = setup(&cli(&["-m", "t:e", "-P"]), &store).unwrap();
+        assert_eq!(ext.title, "english text:external plain · one passage");
         let Source::Passages { words, starts, .. } = &ext.source else {
             unreachable!()
         };
         assert_eq!(words, &["one", "two", "three", "four"]);
         assert_eq!(starts, &[0, 2], "the passage of numbers is gone");
         fs::write(tmp.0.join("external/english.txt"), "1815.\n").unwrap();
-        let err = setup(&cli(&["-m", "ext", "-P"]), &store).err().unwrap();
+        let err = setup(&cli(&["-m", "t:e", "-P"]), &store).err().unwrap();
         assert!(err.to_string().starts_with("no external texts"), "{err}");
 
         let file = tmp.0.join("notes.txt");
@@ -1075,7 +1077,7 @@ mod tests {
 
     #[test]
     fn plain_comes_from_the_config_unless_a_flag_or_file_says() {
-        let config = oui::config::parse("mode = classics\nplain = true");
+        let config = oui::config::parse("mode = text:classics\nplain = true");
         let config = config.unwrap();
         assert_eq!(merge(&cli(&[]), &config).plain, Some(true));
         let off = merge(&cli(&["--plain=false"]), &config);
@@ -1091,10 +1093,10 @@ mod tests {
         let mine = tmp.0.join("texts/french");
         fs::create_dir_all(&mine).unwrap();
         fs::write(mine.join("a.txt"), "[[Moi]]\nun deux").unwrap();
-        let args = cli(&["-m", "classics", "-l", "french"]);
+        let args = cli(&["-m", "text:classics", "-l", "french"]);
         let classics = setup(&args, &store).unwrap();
-        assert_eq!(classics.title, "french classics · one passage");
-        assert_eq!(classics.meta.mode, "classics");
+        assert_eq!(classics.title, "french text:classics · one passage");
+        assert_eq!(classics.meta.mode, "text:classics");
         let Source::Passages { cites, .. } = &classics.source else {
             unreachable!()
         };
@@ -1103,8 +1105,8 @@ mod tests {
         let err = |args: &[&str]| {
             setup(&cli(args), &store).err().unwrap().to_string()
         };
-        assert!(err(&["-m", "classics", "-W", "p"]).starts_with("--with"));
-        assert!(err(&["-m", "classics", "-l", "german"])
+        assert!(err(&["-m", "t:c", "-W", "p"]).starts_with("--with"));
+        assert!(err(&["-m", "t:c", "-l", "german"])
             .starts_with("no classics for 'german'"));
     }
 
@@ -1116,7 +1118,7 @@ mod tests {
             setup(&cli(args), &store).err().unwrap().to_string()
         };
         assert!(
-            err(&["-m", "ext"]).starts_with("no external texts for 'english'")
+            err(&["-m", "t:e"]).starts_with("no external texts for 'english'")
         );
         fs::create_dir_all(tmp.0.join("external")).unwrap();
         let ext = "[[blog, Post (2026)]]\none two three\n\nfour five\n";
@@ -1125,16 +1127,18 @@ mod tests {
         fs::create_dir_all(&mine).unwrap();
         fs::write(mine.join("a.txt"), "[[Moi]]\nsix seven").unwrap();
 
-        let ext = setup(&cli(&["-m", "external"]), &store).unwrap();
-        assert_eq!(ext.title, "english ext · one passage");
-        assert_eq!(ext.meta.mode, "ext");
+        let ext = setup(&cli(&["-m", "text:external"]), &store).unwrap();
+        assert_eq!(ext.title, "english text:external · one passage");
+        assert_eq!(ext.meta.mode, "text:external");
         let Source::Passages { cites, .. } = &ext.source else {
             unreachable!()
         };
         let post = Some("blog, Post (2026)".to_string());
         assert_eq!(cites, &vec![post; 2]);
-        assert!(err(&["-m", "ext", "-W", "p"]).starts_with("--with"));
-        assert!(Cli::try_parse_from(["oui", "-m", "feed"]).is_err());
+        assert!(err(&["-m", "t:e", "-W", "p"]).starts_with("--with"));
+        for old in ["feed", "ext", "classics"] {
+            assert!(Cli::try_parse_from(["oui", "-m", old]).is_err());
+        }
 
         let all = setup(&cli(&["-m", "text"]), &store).unwrap();
         let Source::Passages { cites, .. } = &all.source else {
@@ -1186,7 +1190,7 @@ mod tests {
         assert_eq!((file.language, file.with), (None, vec![]));
         let text = merge(&cli(&["-m", "text"]), &config);
         assert!(text.with.is_empty());
-        assert!(merge(&cli(&["-m", "classics"]), &config).with.is_empty());
+        assert!(merge(&cli(&["-m", "t:c"]), &config).with.is_empty());
         assert!(setup(&text, &no_home()).is_ok(), "config extras are no error");
         let config = oui::config::parse("mode = text").unwrap();
         assert!(

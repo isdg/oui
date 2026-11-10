@@ -24,9 +24,9 @@ USE
     > oui -l russian            # Russian words, ЙЦУКЕН heatmap
     > oui -W p,n                # with punctuation and numbers mixed in
     > oui -m text -l french     # a passage of real French prose
-    > oui -m classics           # a passage of the bundled classics only
-    > oui -m classics -P        # the same, lowercase and unpunctuated
-    > oui -m ext                # a passage of external texts (see below)
+    > oui -m text:classics      # a passage of the bundled classics only
+    > oui -m t:c -P             # the same, lowercase and unpunctuated
+    > oui -m text:external      # a passage of external texts (see below)
     > oui -m funny              # words that follow each other as in prose
     > oui -m n2                 # the language's bigrams, one a word
     > oui -p                    # words that drill your costliest bigrams
@@ -41,10 +41,11 @@ Flags:
                       also any language you keep texts for.
     -m, --mode        words (default); text: a random passage of real prose
                       -- the classics, your texts and external ones;
-                      classics: the bundled classics only; ext (or
-                      external): the external texts only; funny (or
-                      funnywords): words that follow each other as they do
-                      in that prose, so phrases almost mean something;
+                      text:classics (or t:c): the bundled classics only;
+                      text:external (or t:e): the external texts only;
+                      funny (or funnywords): words that follow each other
+                      as they do in that prose, so phrases almost mean
+                      something;
                       practice: see -p; ngrams: that prose's single
                       letters, one a word, each as often as it holds it,
                       and ngrams:N (or n:N, nN) its runs of N letters, so
@@ -58,7 +59,7 @@ Flags:
                       s).
     -P, --plain       Type prose plain: lowercase, bare of punctuation and
                       numbers, as -m funny types its words. For -m text,
-                      classics, ext and a FILE; --plain=false overrides
+                      whichever texts, and a FILE; --plain=false overrides
                       the config.
     -w, --words       Words in the test: 50, the whole file, or one
                       passage.
@@ -68,9 +69,10 @@ Flags:
     -i, --incognito   Record nothing: the tests stay out of the history and
                       oui stats.
 
-Text and classics modes bundle openings of public-domain classics (Austen,
-Dickens, Proust, Hugo, Толстой, Пушкин, Гоголь…). Curly quotes, «», em
-dashes and the like are folded into what a keyboard types.
+Text mode bundles openings of public-domain classics (Austen, Dickens,
+Proust, Hugo, Толстой, Пушкин, Гоголь…). Curly quotes, «», em dashes and
+the like are folded into what a keyboard types. oui stats shows every text
+test as text, whichever texts it drew on.
 
 -------------------------------------------------------------------------------
 KEYS
@@ -186,7 +188,7 @@ CONFIG
 as plcrc; flags override it. Unknown keys are errors.
 
     language = russian
-    mode     = words          # or text, classics, ext, funny
+    mode     = words          # or text, text:classics, funny
     with     = punctuation, numbers
     plain    = true           # as --plain; a FILE ignores it
     words    = 50             # or time = 60
@@ -218,8 +220,8 @@ three come from one article. ~/.oui/external/readme.txt explains the
 directory, logs each run (date, articles, passages per language, source)
 and lists every article used, one tab-separated line each: date, languages,
 feed, guid or url, title. Running it again appends only the articles not
-listed yet. -m ext types these passages alone, -m text among the classics
-and your texts. The articles stay their authors' copyright, so external
+listed yet. -m text:external types these passages alone, -m text among the
+classics and your texts. The articles stay their authors' copyright, so external
 texts are extracted locally and never bundled.
 
 -------------------------------------------------------------------------------

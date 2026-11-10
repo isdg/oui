@@ -143,7 +143,7 @@ bare of punctuation, as in words mode, and take `--with` extras the same.
 
 ### Plain prose
 
-`--plain` strips the passage modes and a `FILE` to the words funny mode
+`--plain` strips text mode's passages and a `FILE` to the words funny mode
 types: lowercase but for `I`, bare of the punctuation around them, numbers
 and lone punctuation dropped. It strips at load, so passage lengths and
 `-w` count what is typed; a passage left empty is dropped. Modes that are

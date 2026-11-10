@@ -2,12 +2,12 @@
 //! as it was typed, hits green and misses red, words never reached dimmed.
 
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Padding, Paragraph};
 use ratatui::Frame;
 
-use super::typing::{typed_spans, wrap};
+use super::typing::{as_typed, width_as_typed, wrap};
 use super::MAX_WIDTH;
 use crate::session::Session;
 
@@ -37,7 +37,8 @@ pub fn draw(
     let words: Vec<(&str, Option<&str>)> = (0..s.words().len())
         .map(|i| (s.words()[i].as_str(), typed(s, i)))
         .collect();
-    let widths: Vec<usize> = words.iter().map(|&(w, t)| width(w, t)).collect();
+    let widths: Vec<usize> =
+        words.iter().map(|&(w, t)| width_as_typed(w, t)).collect();
     let rows = wrap(&widths, usize::from(inner.width));
     let height = usize::from(inner.height);
     let first = scroll.min(rows.len().saturating_sub(height));
@@ -47,7 +48,7 @@ pub fn draw(
             if i > row.start {
                 spans.push(Span::raw(" "));
             }
-            spans.extend(word(words[i].0, words[i].1));
+            spans.extend(as_typed(words[i].0, words[i].1));
         }
         Line::from(spans)
     };
@@ -71,28 +72,6 @@ fn typed(s: &Session, i: usize) -> Option<&str> {
     }
 }
 
-fn width(target: &str, typed: Option<&str>) -> usize {
-    let typed = typed.map_or(0, |t| t.chars().count());
-    target.chars().count().max(typed)
-}
-
-/// A word as typed: whole and green when right, else character by
-/// character, with the characters never typed dimmed and underlined.
-fn word(target: &str, typed: Option<&str>) -> Vec<Span<'static>> {
-    let Some(typed) = typed else {
-        return vec![Span::styled(target.to_string(), Style::new().dim())];
-    };
-    if typed == target {
-        return vec![Span::styled(target.to_string(), Style::new().green())];
-    }
-    let mut spans = typed_spans(target, typed);
-    let rest: String = target.chars().skip(typed.chars().count()).collect();
-    if !rest.is_empty() {
-        spans.push(Span::styled(rest, Style::new().red().dim().underlined()));
-    }
-    spans
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -110,27 +89,11 @@ mod tests {
         s
     }
 
-    fn text(spans: &[Span]) -> Vec<String> {
-        spans.iter().map(|s| s.content.to_string()).collect()
-    }
-
-    #[test]
-    fn words_show_how_they_were_typed() {
-        assert_eq!(word("ab", Some("ab"))[0].style, Style::new().green());
-        let wrong = word("abc", Some("ax"));
-        assert_eq!(text(&wrong), ["a", "b", "c"]);
-        assert_eq!(wrong[1].style, Style::new().red());
-        assert_eq!(wrong[2].style, Style::new().red().dim().underlined());
-        assert_eq!(text(&word("ab", Some("abcd"))), ["a", "b", "c", "d"]);
-        assert_eq!(word("ab", None)[0].style, Style::new().dim());
-    }
-
     #[test]
     fn the_word_in_progress_counts_as_typed() {
         let s = finished(&["ab", "cd", "ef"], "ab c");
         assert_eq!((typed(&s, 0), typed(&s, 1)), (Some("ab"), Some("c")));
         assert_eq!(typed(&s, 2), None);
-        assert_eq!(width("ab", Some("abcd")), 4);
     }
 
     #[test]

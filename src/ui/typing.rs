@@ -138,29 +138,23 @@ fn first_row(current: usize, rows: usize, height: usize) -> usize {
     current.saturating_sub(1).min(rows.saturating_sub(height))
 }
 
-/// Columns word `i` takes: its target, or the input if that overflows it.
+/// Columns word `i` takes: its target, or what was typed for it if that
+/// overflows it.
 fn width(s: &Session, i: usize) -> usize {
-    let target = s.words()[i].chars().count();
-    if i == s.current() {
-        target.max(s.input().chars().count())
-    } else {
-        target
-    }
+    let typed = match i.cmp(&s.current()) {
+        Ordering::Less => Some(s.typed()[i].as_str()),
+        Ordering::Equal => Some(s.input()),
+        Ordering::Greater => None,
+    };
+    width_as_typed(&s.words()[i], typed)
 }
 
 /// Word `i` coloured by how it was typed; the current one carries a cursor.
 fn word(s: &Session, i: usize) -> Vec<Span<'static>> {
     let target = &s.words()[i];
     match i.cmp(&s.current()) {
-        Ordering::Less if s.typed()[i] == *target => {
-            vec![Span::styled(target.clone(), Style::new().green())]
-        }
-        Ordering::Less => {
-            vec![Span::styled(target.clone(), Style::new().red().underlined())]
-        }
-        Ordering::Greater => {
-            vec![Span::styled(target.clone(), Style::new().dim())]
-        }
+        Ordering::Less => as_typed(target, Some(&s.typed()[i])),
+        Ordering::Greater => as_typed(target, None),
         Ordering::Equal => {
             let typed = s.input().chars().count();
             let mut spans = typed_spans(target, s.input());
@@ -172,6 +166,33 @@ fn word(s: &Session, i: usize) -> Vec<Span<'static>> {
             spans
         }
     }
+}
+
+/// Columns a word takes once typed: its target, or the input if longer.
+pub(super) fn width_as_typed(target: &str, typed: Option<&str>) -> usize {
+    let typed = typed.map_or(0, |t| t.chars().count());
+    target.chars().count().max(typed)
+}
+
+/// A word as it was typed: whole and green when right, else character by
+/// character, with the characters never typed dimmed and underlined; a
+/// word not typed at all is dimmed.
+pub(super) fn as_typed(
+    target: &str,
+    typed: Option<&str>,
+) -> Vec<Span<'static>> {
+    let Some(typed) = typed else {
+        return vec![Span::styled(target.to_string(), Style::new().dim())];
+    };
+    if typed == target {
+        return vec![Span::styled(target.to_string(), Style::new().green())];
+    }
+    let mut spans = typed_spans(target, typed);
+    let rest: String = target.chars().skip(typed.chars().count()).collect();
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest, Style::new().red().dim().underlined()));
+    }
+    spans
 }
 
 /// The typed part of a word: target characters green when hit and red when
@@ -239,9 +260,39 @@ mod tests {
     }
 
     #[test]
-    fn overflow_widens_only_the_current_word() {
+    fn overflow_widens_a_word_while_and_after_it_is_typed() {
         let s = session(&["ab", "cd"], "abxy");
         assert_eq!((width(&s, 0), width(&s, 1)), (4, 2));
+        let s = session(&["ab", "cd"], "abxy ");
+        assert_eq!((width(&s, 0), width(&s, 1)), (4, 2));
+        assert_eq!(width_as_typed("ab", Some("abcd")), 4);
+    }
+
+    fn text(spans: &[Span]) -> Vec<String> {
+        spans.iter().map(|s| s.content.to_string()).collect()
+    }
+
+    #[test]
+    fn words_show_how_they_were_typed() {
+        assert_eq!(as_typed("ab", Some("ab"))[0].style, Style::new().green());
+        let wrong = as_typed("abc", Some("ax"));
+        assert_eq!(text(&wrong), ["a", "b", "c"]);
+        assert_eq!(wrong[1].style, Style::new().red());
+        assert_eq!(wrong[2].style, Style::new().red().dim().underlined());
+        assert_eq!(text(&as_typed("ab", Some("abcd"))), ["a", "b", "c", "d"]);
+        assert_eq!(as_typed("ab", None)[0].style, Style::new().dim());
+    }
+
+    #[test]
+    fn a_passed_word_keeps_its_marks_character_by_character() {
+        let s = session(&["abc", "de", "fg"], "axc de ");
+        let missed = word(&s, 0);
+        assert_eq!(text(&missed), ["a", "b", "c"]);
+        let styles: Vec<Style> = missed.iter().map(|s| s.style).collect();
+        let (hit, miss) = (Style::new().green(), Style::new().red());
+        assert_eq!(styles, [hit, miss, hit], "only the b is marked");
+        assert_eq!(word(&s, 1), as_typed("de", Some("de")));
+        assert_eq!(word(&s, 2)[0].style, Style::new().bold().reversed());
     }
 
     #[test]

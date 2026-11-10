@@ -44,8 +44,10 @@ Three bands, top to bottom, under a one-line header:
 - **Input** — the word being typed, centred vertically on screen. Typed
   characters are coloured by correctness and the rest of the target is ghosted.
 - **Text** — the whole test, word-wrapped as in ttyper, scrolled so the
-  current line is always visible. Done words are green or red, the current
-  word is bold, the rest dimmed.
+  current line is always visible. A done word is green when right; a wrong
+  one keeps its marks character by character -- hits green, misses red,
+  what was never typed dimmed and underlined -- as the results' text does.
+  The current word is bold, the rest dimmed.
 
 ### Editing rules
 

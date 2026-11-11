@@ -186,6 +186,10 @@ struct TestArgs {
     /// Record nothing: tests are left out of history.jsonl and `oui stats`.
     #[arg(short, long, alias = "inkognito")]
     incognito: bool,
+    /// Go on from where the last test of FILE, else of text mode, stopped:
+    /// in its mode, language and --plain, unless given.
+    #[arg(short = 'c', long = "continue", conflicts_with = "practice")]
+    resume: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -649,8 +653,20 @@ fn main() -> Result<()> {
         }
         None => {
             let config = config(&oui::config::path()?, &store)?;
-            let args = merge(&cli.test, &config);
-            let app = App::new(setup(&args, &store)?, Some(store));
+            let last = match cli.test.resume {
+                true => Some(last_text(&cli.test, store.load()?.records)?),
+                false => None,
+            };
+            let test = match &last {
+                Some(last) => going_on(&cli.test, last),
+                None => cli.test.clone(),
+            };
+            let setup = setup(&merge(&test, &config), &store)?;
+            let start = last.map(|l| stopped(&setup.source, &l)).transpose()?;
+            let mut app = App::new(setup, Some(store));
+            if let Some(at) = start {
+                app.begin(at);
+            }
             ratatui::run(|terminal| run(terminal, app))
         }
     }
@@ -775,6 +791,57 @@ fn merge(cli: &TestArgs, config: &Config) -> TestArgs {
         time,
         layout: cli.layout.or(config.layout),
         incognito: cli.incognito,
+        resume: cli.resume,
+    }
+}
+
+/// The last test `--continue` goes on from: of FILE, else of text mode,
+/// of the language, mode and plainness given.
+fn last_text(cli: &TestArgs, records: Vec<Record>) -> Result<Record> {
+    if let Some(mode) = cli.mode.filter(|m| !m.passages()) {
+        bail!("--continue goes on in text mode or a FILE, not --mode {mode}");
+    }
+    let name = cli.file.as_deref().and_then(Path::file_name);
+    let name = name.map(|n| n.to_string_lossy().into_owned());
+    let mode = |r: &Record| <Mode as ValueEnum>::from_str(&r.meta.mode, false);
+    let given = |r: &Record| match &name {
+        Some(name) => r.meta.mode == "file" && r.meta.source == *name,
+        None => {
+            let language = cli.language.as_ref();
+            mode(r).is_ok_and(Mode::passages)
+                && cli.mode.is_none_or(|m| mode(r) == Ok(m))
+                && language.is_none_or(|l| *l == r.meta.source)
+        }
+    };
+    let plain = |r: &Record| cli.plain.is_none_or(|p| p == r.meta.plain);
+    let last = records.into_iter().rev().find(|r| given(r) && plain(r));
+    let what = name.unwrap_or_else(|| "text mode".into());
+    last.ok_or_else(|| anyhow!("no test of {what} to continue"))
+}
+
+/// `cli` going on from `last`: in its mode, language and plainness,
+/// unless given.
+fn going_on(cli: &TestArgs, last: &Record) -> TestArgs {
+    let mut args = cli.clone();
+    args.plain = Some(cli.plain.unwrap_or(last.meta.plain));
+    if cli.file.is_none() {
+        let mode = <Mode as ValueEnum>::from_str(&last.meta.mode, false);
+        args.mode = cli.mode.or(mode.ok());
+        let language = cli.language.clone();
+        args.language = language.or_else(|| Some(last.meta.source.clone()));
+    }
+    args
+}
+
+/// The word of `source` after the last one `last` submitted.
+fn stopped(source: &Source, last: &Record) -> Result<usize> {
+    let cite = last.meta.cite.as_deref();
+    match source.locate(cite, &last.words) {
+        Some(at) => Ok(at + last.typed.len()),
+        None => bail!(
+            "{} has changed since its last test: no telling where it stopped",
+            cite.unwrap_or(&last.meta.source)
+        ),
     }
 }
 
@@ -1699,6 +1766,93 @@ mod tests {
         type_out(&mut app, "kl");
         press(&mut app, KeyCode::Char('c'));
         assert_eq!(typing(&app), ["ab", "cd"], "wrapping to the first");
+    }
+
+    /// The record of a test of `words`, `keys` typed, as `meta` says.
+    fn typed(words: &str, keys: &str, meta: Meta) -> Record {
+        let mut session = Session::new(words::split(words), None);
+        let t0 = Instant::now();
+        for c in keys.chars() {
+            session.apply(Input::Char(c), t0);
+        }
+        Record::new(&session, t0, String::new(), meta)
+    }
+
+    fn meta(source: &str, mode: &str, cite: Option<&str>) -> Meta {
+        let (source, mode) = (source.into(), mode.into());
+        Meta { source, mode, cite: cite.map(Into::into), ..Meta::default() }
+    }
+
+    #[test]
+    fn continue_picks_the_last_test_of_the_text_given() {
+        let classics = meta("english", "text:classics", Some("X"));
+        let plain = Meta { plain: true, ..meta("french", "text", None) };
+        let records = vec![
+            typed("ab cd", "ab ", classics),
+            typed("ef", "e", meta("notes.txt", "file", None)),
+            typed("gh", "g", plain),
+            typed("ij", "i", meta("english", "words", None)),
+        ];
+        let last = |args: &[&str]| {
+            let found = last_text(&cli(args), records.clone());
+            found.map(|r| r.words[0].clone()).map_err(|e| e.to_string())
+        };
+        assert_eq!(last(&["-c"]), Ok("gh".into()));
+        assert_eq!(last(&["-c", "-l", "english"]), Ok("ab".into()));
+        assert_eq!(last(&["-c", "-m", "t:c"]), Ok("ab".into()));
+        assert_eq!(last(&["-c", "--plain=false"]), Ok("ab".into()));
+        assert_eq!(last(&["-c", "dir/notes.txt"]), Ok("ef".into()));
+        assert_eq!(
+            last(&["-c", "-m", "t:e"]),
+            Err("no test of text mode to continue".into())
+        );
+        assert_eq!(
+            last(&["-c", "other.txt"]),
+            Err("no test of other.txt to continue".into())
+        );
+        assert!(last(&["-c", "-m", "words"]).is_err());
+        let parsed = Cli::try_parse_from(["oui", "-c", "-p"]);
+        assert!(parsed.is_err(), "practice has nothing to go on in");
+    }
+
+    #[test]
+    fn continue_types_as_the_last_test_did_unless_told_otherwise() {
+        let last = typed("ab", "a", meta("french", "text:classics", None));
+        let last = Record { meta: Meta { plain: true, ..last.meta }, ..last };
+        let args = going_on(&cli(&["-c"]), &last);
+        assert_eq!(args.mode, Some(Mode::Text(Texts::Classics)));
+        assert_eq!(args.language.as_deref(), Some("french"));
+        assert_eq!(args.plain, Some(true));
+        let args = going_on(&cli(&["-c", "-m", "t", "--plain=false"]), &last);
+        assert_eq!(args.mode, Some(Mode::Text(Texts::All)));
+        assert_eq!(args.plain, Some(false));
+        let args = going_on(&cli(&["-c", "notes.txt"]), &last);
+        assert_eq!((args.mode, args.language), (None, None));
+    }
+
+    #[test]
+    fn continue_starts_after_the_last_word_submitted() {
+        let passage = |text: &str, cite: &str| words::Passage {
+            words: words::split(text),
+            cite: Some(cite.into()),
+        };
+        let source = Source::passages(vec![
+            passage("ab cd", "X"),
+            passage("ef ab cd ef", "Y"),
+        ]);
+        let stopped_at = |keys, cite| {
+            let last = typed("ab cd ef", keys, meta("english", "text", cite));
+            stopped(&source, &last).map_err(|e| e.to_string())
+        };
+        assert_eq!(stopped_at("ab ", Some("Y")), Ok(4), "on cd");
+        assert_eq!(stopped_at("ab c", Some("Y")), Ok(4), "cd again");
+        assert_eq!(stopped_at("ab cd ", Some("X")), Ok(2), "into Y");
+        assert_eq!(
+            stopped_at("ab ", Some("Z")),
+            Err("Z has changed since its last test: no telling where it \
+                 stopped"
+                .into())
+        );
     }
 
     #[test]

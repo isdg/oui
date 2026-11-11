@@ -468,6 +468,28 @@ impl Source {
         cites[self.passage(at)?].as_deref()
     }
 
+    /// The first word of an ordered source that a test of `words` could
+    /// have started on, its passage cited `cite`; wraps as `take` does.
+    pub fn locate(
+        &self,
+        cite: Option<&str>,
+        words: &[String],
+    ) -> Option<usize> {
+        let text = match self {
+            Source::Text(text) | Source::Passages { words: text, .. } => text,
+            _ => return None,
+        };
+        if words.is_empty() {
+            return None;
+        }
+        let word = |at: usize, i: usize| &text[(at + i) % text.len()];
+        let starts = |&at: &usize| {
+            let typed = (0..words.len()).all(|i| *word(at, i) == words[i]);
+            typed && self.cite(at) == cite
+        };
+        (0..text.len()).find(starts)
+    }
+
     /// `n` words; texts and passages continue from word `from`, wrapping.
     pub fn take(&self, from: usize, n: usize, rng: &mut Rng) -> Vec<String> {
         match self {
@@ -801,6 +823,29 @@ mod tests {
         let text = Source::Text(owned(&["a", "b", "c"]));
         let mut rng = Rng::with_seed(1);
         assert_eq!(text.take(2, 4, &mut rng), owned(&["c", "a", "b", "c"]));
+    }
+
+    #[test]
+    fn a_test_is_found_where_it_started_under_its_citation() {
+        let source = Source::passages(vec![
+            cited(&["a", "b"], "X"),
+            uncited(&["a", "b"]),
+            cited(&["c", "a"], "Y"),
+            cited(&["b", "c"], "Y"),
+        ]);
+        let find = |cite, words: &[&str]| source.locate(cite, &owned(words));
+        assert_eq!(find(Some("X"), &["a", "b"]), Some(0));
+        assert_eq!(find(None, &["a", "b"]), Some(2), "uncited, not X");
+        assert_eq!(find(Some("Y"), &["a", "b", "c"]), Some(5), "across");
+        assert_eq!(find(Some("Y"), &["b", "c", "a"]), Some(6), "wrapping");
+        assert_eq!(find(Some("Z"), &["a"]), None, "no such work");
+        assert_eq!(find(Some("X"), &["b", "a"]), Some(1), "mid-passage");
+        assert_eq!(find(Some("X"), &["b", "b"]), None, "nor such words");
+        assert_eq!(find(Some("X"), &[]), None);
+        let text = Source::Text(owned(&["a", "b", "a", "c"]));
+        assert_eq!(text.locate(None, &owned(&["a", "c"])), Some(2));
+        assert_eq!(text.locate(Some("X"), &owned(&["a"])), None);
+        assert_eq!(Source::Random(owned(&["a"])).locate(None, &[]), None);
     }
 
     #[test]

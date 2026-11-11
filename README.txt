@@ -26,6 +26,7 @@ USE
     > oui -m text -l french     # a passage of real French prose
     > oui -m text:classics      # a passage of the bundled classics only
     > oui -m t:c -P             # the same, lowercase and unpunctuated
+    > oui -c                    # on from where the last text test stopped
     > oui -m text:external      # a passage of external texts (see below)
     > oui -m funny              # words that follow each other as in prose
     > oui -m funny -P           # the same, lowercase and unpunctuated
@@ -71,6 +72,10 @@ Flags:
                       detected from the words when omitted.
     -i, --incognito   Record nothing: the tests stay out of the history and
                       oui stats.
+    -c, --continue    Go on from where the last recorded test of FILE, else
+                      of text mode, stopped, in that test's mode, language
+                      and --plain; -m, -l and -P pick which test to go on
+                      from instead.
 
 Text mode bundles openings of public-domain classics (Austen, Dickens,
 Proust, Hugo, Толстой, Пушкин, Гоголь…). Curly quotes, «», em dashes and

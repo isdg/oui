@@ -42,9 +42,9 @@ Flags:
     FILE              Type this text in order instead of random words.
     -l, --language    english (default), french, russian; for text mode,
                       also any language you keep texts for.
-    -m, --mode        words (default); text: a passage of real prose, the
-                      first of a work picked at random from the classics,
-                      your texts and external ones;
+    -m, --mode        words (default); text: a passage of real prose, any
+                      of a work picked at random from the classics, your
+                      texts and external ones;
                       text:classics (or t:c): the bundled classics only;
                       text:external (or t:e): the external texts only;
                       funny (or funnywords): words that follow each other
@@ -102,7 +102,8 @@ its citation; up/down scroll it and o goes back -- r starts a new test, p
 starts practice, i takes the test just typed out of the history -- and i
 again puts it back -- and q quits. For a text or a file, c continues it:
 the next test starts where this one stopped, so a text can be read through
-passage by passage. A new text test starts a work from its first passage.
+passage by passage. A new text test starts on a random passage of a work
+picked at random, so a work that comes up again rarely opens the same way.
 
 O opens that work to read: its passages in order, the ones behind your
 place dimmed, with up/down to scroll. The passage at the top is marked, and

@@ -409,15 +409,17 @@ impl Source {
         }
     }
 
-    /// The word a new test starts on: the first of a random work, so the
-    /// tests continuing it read on from its start; else 0.
+    /// The word a new test starts on: the first of a random passage of a
+    /// random work, so a work comes up again in another of its passages;
+    /// else 0.
     pub fn start(&self, rng: &mut Rng) -> usize {
         let Source::Passages { starts, cites, .. } = self else { return 0 };
         let works = works(cites.iter().map(Option::as_deref));
-        match works.is_empty() {
-            true => 0,
-            false => starts[works[rng.usize(..works.len())].start],
+        if works.is_empty() {
+            return 0;
         }
+        let work = works[rng.usize(..works.len())].clone();
+        starts[rng.usize(work)]
     }
 
     /// Whether the words come in an order a later test can go on from.
@@ -766,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_start_on_the_first_passage_of_a_work() {
+    fn tests_start_on_any_passage_of_a_work() {
         let source = Source::passages(vec![
             cited(&["a"], "X"),
             cited(&["b"], "X"),
@@ -779,7 +781,7 @@ mod tests {
         let mut rng = Rng::with_seed(2);
         let starts: BTreeSet<usize> =
             (0..200).map(|_| source.start(&mut rng)).collect();
-        assert_eq!(starts, BTreeSet::from([0, 2, 3, 4, 6]));
+        assert_eq!(starts, BTreeSet::from_iter(0..7));
         let work = |source: &Source, at| {
             let spans = source.work(at).into_iter().map(|p| (p.start, p.end));
             spans.collect::<Vec<_>>()
@@ -795,6 +797,16 @@ mod tests {
         assert!(source.ordered() && Source::Text(owned(&["a"])).ordered());
         assert!(!Source::Random(owned(&["a"])).ordered());
         assert_eq!(Source::passages(vec![]).start(&mut rng), 0);
+    }
+
+    #[test]
+    fn a_long_work_is_picked_no_more_often_than_a_short_one() {
+        let mut passages = vec![cited(&["y"], "Y")];
+        passages.extend((0..9).map(|_| cited(&["x"], "X")));
+        let source = Source::passages(passages);
+        let mut rng = Rng::with_seed(4);
+        let short = (0..2000).filter(|_| source.start(&mut rng) == 0).count();
+        assert!((800..1200).contains(&short), "Y started {short} times");
     }
 
     fn owned(words: &[&str]) -> Vec<String> {

@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::history::{Flags, INCOGNITO};
+
 /// Bumped on any change old readers would misread; newer records are skipped.
 pub const VERSION: u32 = 1;
 /// The share of probes answered right from which a test's speed counts;
@@ -45,9 +47,15 @@ pub struct ReadRecord {
     /// The terminal's size, as line length changes how fast one reads.
     pub cols: u16,
     pub rows: u16,
+    #[serde(default, skip_serializing_if = "Flags::is_empty")]
+    pub flags: Flags,
 }
 
 impl ReadRecord {
+    pub fn incognito(&self) -> bool {
+        self.flags.has(INCOGNITO)
+    }
+
     pub fn elapsed(&self) -> Duration {
         Duration::from_millis(self.elapsed_ms)
     }
@@ -135,6 +143,7 @@ pub(crate) mod tests {
             probes: vec![Asked("It rained.".into(), true, false, 1200)],
             cols: 80,
             rows: 24,
+            flags: Flags::default(),
         }
     }
 

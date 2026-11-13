@@ -178,7 +178,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::history::{Meta, Stroke, VERSION};
+    use crate::history::{Flags, Meta, Stroke, VERSION};
 
     const MS: Duration = Duration::from_millis(1);
 
@@ -226,6 +226,7 @@ mod tests {
             words: Vec::new(),
             typed: Vec::new(),
             keys: log.iter().map(Stroke::from).collect(),
+            flags: Flags::default(),
         }
     }
 

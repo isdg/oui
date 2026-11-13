@@ -2,6 +2,7 @@
 //! JSON record per test, appended as it ends, keeping the raw keystrokes so
 //! any statistic can be recomputed over old tests.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -36,6 +37,34 @@ pub struct Record {
     pub words: Vec<String>,
     pub typed: Vec<String>,
     pub keys: Vec<Stroke>,
+    #[serde(default, skip_serializing_if = "Flags::is_empty")]
+    pub flags: Flags,
+}
+
+/// Marks a record carries beyond what the test was, such as [`INCOGNITO`];
+/// plain strings, so one this build does not know survives a rewrite.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Flags(BTreeSet<String>);
+
+/// Kept out of `oui stats` unless asked for, yet a test like any other.
+pub const INCOGNITO: &str = "incognito";
+
+impl Flags {
+    pub fn has(&self, flag: &str) -> bool {
+        self.0.contains(flag)
+    }
+
+    pub fn set(&mut self, flag: &str, on: bool) {
+        match on {
+            true => self.0.insert(flag.to_owned()),
+            false => self.0.remove(flag),
+        };
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// What a test was, beyond its keystrokes; plain strings so the file
@@ -100,7 +129,12 @@ impl Record {
             words: session.words()[..reached].to_vec(),
             typed: session.typed().to_vec(),
             keys: session.log().iter().map(Stroke::from).collect(),
+            flags: Flags::default(),
         }
+    }
+
+    pub fn incognito(&self) -> bool {
+        self.flags.has(INCOGNITO)
     }
 
     pub fn log(&self) -> Vec<Keystroke> {
@@ -165,10 +199,10 @@ impl Store {
         append(&self.history(), record)
     }
 
-    /// Takes the latest line recording `record` out of the history; false
-    /// if none does.
-    pub fn remove(&self, record: &Record) -> Result<bool> {
-        remove(&self.history(), record)
+    /// Rewrites the latest line recording `old` as `new`; false if none
+    /// records it.
+    pub fn replace(&self, old: &Record, new: &Record) -> Result<bool> {
+        replace(&self.history(), old, new)
     }
 
     /// Every readable record, oldest first; a missing file is no history.
@@ -180,9 +214,13 @@ impl Store {
         append(&self.reads(), record)
     }
 
-    /// As [`Store::remove`], of a reading test.
-    pub fn remove_read(&self, record: &ReadRecord) -> Result<bool> {
-        remove(&self.reads(), record)
+    /// As [`Store::replace`], of a reading test.
+    pub fn replace_read(
+        &self,
+        old: &ReadRecord,
+        new: &ReadRecord,
+    ) -> Result<bool> {
+        replace(&self.reads(), old, new)
     }
 
     /// As [`Store::load`], of the reading tests.
@@ -207,8 +245,9 @@ fn append<T: Serialize>(path: &Path, record: &T) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-fn remove<T: Serialize>(path: &Path, record: &T) -> Result<bool> {
-    let line = serde_json::to_string(record)?;
+fn replace<T: Serialize>(path: &Path, old: &T, new: &T) -> Result<bool> {
+    let (line, with) =
+        (serde_json::to_string(old)?, serde_json::to_string(new)?);
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -221,11 +260,9 @@ fn remove<T: Serialize>(path: &Path, record: &T) -> Result<bool> {
     let Some(i) = lines.iter().rposition(|l| *l == line) else {
         return Ok(false);
     };
-    lines.remove(i);
+    lines[i] = &with;
     let mut kept = lines.join("\n");
-    if !kept.is_empty() {
-        kept.push('\n');
-    }
+    kept.push('\n');
     // Written beside the file, then renamed over it, so a failure midway
     // leaves it whole.
     let tmp = path.with_extension("jsonl.tmp");
@@ -380,26 +417,51 @@ mod tests {
     }
 
     #[test]
-    fn remove_takes_out_the_latest_line_of_a_record() {
-        let tmp = TempDir::new("remove");
+    fn replace_rewrites_the_latest_line_of_a_record() {
+        let tmp = TempDir::new("replace");
         let store = Store::at(&tmp.0);
         let record = |at: &str| {
             let (s, now) = played(&["a"], "a", None);
             Record::new(&s, now, at.to_string(), meta())
         };
         let (a, b) = (record("t0"), record("t1"));
-        assert!(!store.remove(&a).unwrap(), "no file yet");
+        let mut c = a.clone();
+        c.flags.set(INCOGNITO, true);
+        assert!(!store.replace(&a, &c).unwrap(), "no file yet");
         for r in [&a, &b, &a] {
             store.append(r).unwrap();
         }
-        assert!(store.remove(&a).unwrap());
-        assert_eq!(store.load().unwrap().records, [a.clone(), b.clone()]);
-        assert!(store.remove(&a).unwrap());
-        assert!(!store.remove(&a).unwrap(), "no line left of it");
-        assert!(store.remove(&b).unwrap());
-        assert_eq!(fs::read_to_string(store.history()).unwrap(), "");
+        assert!(store.replace(&a, &c).unwrap());
+        let loaded = store.load().unwrap().records;
+        assert_eq!(loaded, [a.clone(), b.clone(), c.clone()]);
+        assert!(store.replace(&a, &c).unwrap());
+        assert!(!store.replace(&a, &c).unwrap(), "no line left of it");
+        assert!(store.replace(&c, &a).unwrap());
+        let loaded = store.load().unwrap().records;
+        assert_eq!(loaded, [c.clone(), b.clone(), a.clone()]);
         let left: Vec<_> = fs::read_dir(&tmp.0).unwrap().collect();
         assert_eq!(left.len(), 1, "no temporary file stays");
+    }
+
+    #[test]
+    fn flags_are_kept_whether_known_or_not() {
+        let mut flags = Flags::default();
+        assert!(!flags.has(INCOGNITO));
+        flags.set(INCOGNITO, true);
+        assert!(flags.has(INCOGNITO));
+        let json = r#"["later","incognito"]"#;
+        let read: Flags = serde_json::from_str(json).unwrap();
+        assert!(read.has(INCOGNITO) && read.has("later"));
+        assert_eq!(
+            serde_json::to_string(&read).unwrap(),
+            r#"["incognito","later"]"#
+        );
+        flags.set(INCOGNITO, false);
+        assert!(flags.is_empty());
+        let (s, now) = played(&["a"], "a", None);
+        let plain = Record::new(&s, now, "t".into(), meta());
+        let line = serde_json::to_string(&plain).unwrap();
+        assert!(!line.contains("flags"), "none written when none set");
     }
 
     #[test]
@@ -409,15 +471,18 @@ mod tests {
         let record = reads::tests::record;
         let (a, b) = (record("t0"), record("t1"));
         assert!(store.load_reads().unwrap().records.is_empty());
-        assert!(!store.remove_read(&a).unwrap(), "no file yet");
+        assert!(!store.replace_read(&a, &b).unwrap(), "no file yet");
         store.append_read(&a).unwrap();
         store.append_read(&b).unwrap();
         let newer = ReadRecord { v: reads::VERSION + 1, ..record("t2") };
         store.append_read(&newer).unwrap();
         let history = store.load_reads().unwrap();
         assert_eq!((&history.records, history.skipped), (&vec![a, b], 1));
-        assert!(store.remove_read(&history.records[0]).unwrap());
-        assert_eq!(store.load_reads().unwrap().records.len(), 1);
+        let mut flagged = history.records[0].clone();
+        flagged.flags.set(INCOGNITO, true);
+        assert!(store.replace_read(&history.records[0], &flagged).unwrap());
+        let records = store.load_reads().unwrap().records;
+        assert!(records[0].incognito() && !records[1].incognito());
         assert!(store.load().unwrap().records.is_empty(), "tests apart");
         assert!(!store.history().exists());
     }

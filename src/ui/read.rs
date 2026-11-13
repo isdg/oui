@@ -250,14 +250,14 @@ pub fn probe(frame: &mut Frame, test: &ReadTest, title: &str) {
     frame.render_widget(Line::from(at).dim().right_aligned(), footer);
 }
 
-/// The finished test; `kept` tells whether the history holds it, if it
-/// can.
+/// The finished test; `incognito` tells whether the history holds it
+/// flagged so, when it holds it at all.
 pub fn results(
     frame: &mut Frame,
     record: &ReadRecord,
     title: &str,
     notice: Option<&str>,
-    kept: Option<bool>,
+    incognito: Option<bool>,
 ) {
     use Constraint::{Fill, Length};
 
@@ -273,9 +273,9 @@ pub fn results(
     let mut asked_of = vec![rule("Sentences", 34)];
     asked_of.extend(record.probes.iter().map(|p| asked(p, width)));
     frame.render_widget(Paragraph::new(lines(asked_of)), bottom);
-    let incognito = match kept {
-        Some(true) => "i incognito · ",
-        Some(false) => "i record · ",
+    let incognito = match incognito {
+        Some(false) => "i incognito · ",
+        Some(true) => "i count · ",
         None => "",
     };
     let keys = format!(" r next text · {incognito}q quit");
@@ -501,7 +501,7 @@ mod tests {
         let record = test.record("t".into(), Origin::default(), (80, 24));
         let notice = Some("not saved");
         let rows =
-            render(76, 20, |f| results(f, &record, "en", notice, Some(true)));
+            render(76, 20, |f| results(f, &record, "en", notice, Some(false)));
         let screen = rows.join("\n");
         assert!(screen.contains("WPM          : 252"), "{screen}");
         assert!(screen.contains("Words/min    : 420"), "{screen}");

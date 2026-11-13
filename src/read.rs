@@ -7,6 +7,7 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crate::external;
+use crate::history::Flags;
 use crate::probes::Probe;
 use crate::reads::{self, Asked, ReadRecord, Turn, View};
 use crate::sentences;
@@ -441,6 +442,7 @@ impl ReadTest {
             probes: self.probes.iter().zip(&self.answers).map(asked).collect(),
             cols: size.0,
             rows: size.1,
+            flags: Flags::default(),
         };
         record.wpm = stats::wpm(chars, record.elapsed());
         record

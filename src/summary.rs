@@ -90,6 +90,10 @@ pub struct View {
     pub by: Option<Period>,
     /// How WPM over time is drawn.
     pub plot: Plot,
+    /// Counts the tests flagged incognito too.
+    pub incognito: bool,
+    /// Tests flagged incognito kept out of the records, to say so.
+    pub left_out: usize,
     /// Adds the heatmaps and the key and bigram rankings.
     pub detailed: bool,
     /// Adds the fingers, rows and hand moves.
@@ -107,9 +111,10 @@ pub fn render(records: &[Record], view: &View) -> String {
     out.push_str("\n     ── History ─────────────────────────\n");
     let _ = writeln!(
         out,
-        "     Tests        : {}   ({} completed)",
+        "     Tests        : {}   ({} completed{})",
         records.len(),
-        wpms.len()
+        wpms.len(),
+        incognito(view.left_out)
     );
     if let (Some(first), Some(last)) = (records.first(), records.last()) {
         let (first, last) = (day(&first.at), day(&last.at));
@@ -458,9 +463,17 @@ fn period_table(groups: &[(String, Vec<&Record>)], period: Period) -> String {
 
 /// The reading tests: how well they were taken in, then the speed of
 /// those that count, per text and kind of text; nothing without tests.
-pub fn reading(records: &[ReadRecord]) -> String {
+/// The reading tests; `left_out` more were flagged incognito.
+pub fn reading(records: &[ReadRecord], left_out: usize) -> String {
+    const HEADER: &str = "\n     ── Reading ─────────────────────────\n";
     if records.is_empty() {
-        return String::new();
+        return match left_out {
+            0 => String::new(),
+            n => format!(
+                "{HEADER}     Tests        : 0   ({n} incognito \
+                          left out)\n"
+            ),
+        };
     }
     let add = |(a, b): (usize, usize), (c, d)| (a + c, b + d);
     let sum = |of: fn(&ReadRecord) -> (usize, usize)| {
@@ -472,13 +485,13 @@ pub fn reading(records: &[ReadRecord]) -> String {
     let counting = records.iter().filter(|r| r.counts()).count();
     let ms: u64 = records.iter().map(|r| r.elapsed_ms).sum();
 
-    let mut out = String::new();
-    out.push_str("\n     ── Reading ─────────────────────────\n");
+    let mut out = HEADER.to_string();
     let _ = writeln!(
         out,
-        "     Tests        : {}   ({counting} count, at {:.0}% right)",
+        "     Tests        : {}   ({counting} count, at {:.0}% right{})",
         records.len(),
-        PASS * 100.0
+        PASS * 100.0,
+        incognito(left_out)
     );
     let time = hms(Duration::from_millis(ms));
     let _ = writeln!(out, "     Time reading : {time}");
@@ -525,6 +538,14 @@ pub fn reading(records: &[ReadRecord]) -> String {
         );
     }
     out
+}
+
+/// How many tests flagged incognito were left out, if any.
+fn incognito(left_out: usize) -> String {
+    match left_out {
+        0 => String::new(),
+        n => format!(", {n} incognito left out"),
+    }
 }
 
 fn percent(part: usize, whole: usize) -> String {
@@ -905,7 +926,7 @@ mod tests {
             read("book.txt", true, 900.0, 4),
             read("english", false, 250.0, 9),
         ];
-        let out = reading(&records);
+        let out = reading(&records, 0);
         assert!(out.contains("Tests        : 4   (3 count, at 80% right)"));
         assert!(out.contains("Time reading : 0:08:00"), "{out}");
         assert!(out.contains("Recognised   : 78%  (31/40)"), "{out}");
@@ -916,14 +937,14 @@ mod tests {
         };
         assert_eq!(row("book.txt · running"), "3 2 250 200 73%", "{out}");
         assert_eq!(row("english · excerpts"), "1 1 250 200 90%", "{out}");
-        assert_eq!(reading(&[]), "");
+        assert_eq!(reading(&[], 0), "");
         let paced = |view| {
             let pace = Some(300.0);
             ReadRecord { pace, view, ..read("b", true, 300.0, 10) }
         };
-        let out = reading(&[paced(None), paced(Some(reads::View::Blink))]);
+        let out = reading(&[paced(None), paced(Some(reads::View::Blink))], 0);
         assert!(out.contains("b · slide") && out.contains("b · blink"));
-        let none = reading(&records[2..3]);
+        let none = reading(&records[2..3], 0);
         assert!(none.contains("1      0     —          —"), "{none}");
     }
 
@@ -1171,6 +1192,27 @@ mod tests {
         let out = render(&records, &View { colour: true, ..view });
         assert!(out.contains("\x1b[38;5;239m"), "{out}");
         assert!(out.contains("\x1b[38;5;243m"), "{out}");
+    }
+
+    #[test]
+    fn incognito_tests_left_out_are_counted_in_the_headers() {
+        let records = [record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00")];
+        let out = render(&records, &summary());
+        assert!(out.contains("Tests        : 1   (1 completed)\n"), "{out}");
+        let out = render(&records, &View { left_out: 2, ..summary() });
+        assert!(
+            out.contains(
+                "Tests        : 1   (1 completed, 2 incognito left out)"
+            ),
+            "{out}"
+        );
+        assert_eq!(
+            reading(&[], 3),
+            "\n     ── Reading ─────────────────────────\n     \
+             Tests        : 0   (3 incognito left out)\n"
+        );
+        let read = reading(&[reads::tests::record("t")], 1);
+        assert!(read.contains("at 80% right, 1 incognito left out)"), "{read}");
     }
 
     #[test]

@@ -19,7 +19,7 @@ use oui::chain::Chain;
 use oui::config::Config;
 use oui::external;
 use oui::extras::{Decorator, Extra};
-use oui::history::{Meta, Record, Store};
+use oui::history::{Meta, Record, Store, INCOGNITO};
 use oui::keyboard::{Layout, Measure};
 use oui::ngrams::Ngrams;
 use oui::practice::{self, Target};
@@ -109,6 +109,9 @@ enum Cmd {
         /// How WPM over time is drawn.
         #[arg(long, value_enum, default_value_t)]
         plot: Plot,
+        /// Count the tests flagged incognito too.
+        #[arg(long)]
+        incognito: bool,
         /// Add the heatmaps and the key and bigram rankings.
         #[arg(short, long)]
         detailed: bool,
@@ -320,13 +323,13 @@ struct App {
     /// The history tests are recorded in and practice draws on; `None`
     /// records and practises nothing.
     store: Option<Store>,
-    /// Finished tests are not recorded in the store.
+    /// Finished tests are recorded incognito.
     incognito: bool,
     /// Shown on the results screen, e.g. when a record could not be saved.
     notice: Option<String>,
-    /// The record of the test on the results screen, and whether the
-    /// history holds it: `i` takes it out and puts it back.
-    record: Option<(Record, bool)>,
+    /// The record of the test on the results screen, as the history holds
+    /// it: `i` flags it incognito and back.
+    record: Option<Record>,
     screen: Screen,
 }
 
@@ -403,7 +406,7 @@ impl App {
 
     fn title(&self) -> String {
         let mut title = self.run.title.clone();
-        if matches!(self.record, Some((_, false))) {
+        if self.record.as_ref().map_or(self.incognito, Record::incognito) {
             title.push_str(" · incognito");
         }
         title
@@ -423,10 +426,10 @@ impl App {
             }
             let cite = feed.cite().map(str::to_owned);
             let meta = Meta { cite, ..self.run.meta.clone() };
-            let store = self.store.as_ref().filter(|_| !self.incognito);
-            let saved = save(store, session, now, &meta);
+            let store = self.store.as_ref();
+            let saved = save(store, session, now, &meta, self.incognito);
             (self.record, self.notice) = match saved {
-                Ok(record) => (record.map(|r| (r, true)), None),
+                Ok(record) => (record, None),
                 Err(e) => (None, Some(format!("not saved: {e:#}"))),
             };
             let report = Report::new(session, session.elapsed(now));
@@ -440,22 +443,23 @@ impl App {
         }
     }
 
-    /// Takes the test on the results screen out of the history, or puts
-    /// it back.
-    fn toggle_recorded(&mut self) {
-        let (Some(store), Some((record, kept))) =
-            (&self.store, &mut self.record)
+    /// Flags the test on the results screen incognito in the history, or
+    /// clears the flag.
+    fn toggle_incognito(&mut self) {
+        let (Some(store), Some(record)) = (&self.store, &mut self.record)
         else {
             return;
         };
-        let done = match *kept {
-            true => store.remove(record).map(drop),
-            false => store.append(record),
+        let mut flagged = record.clone();
+        flagged.flags.set(INCOGNITO, !record.incognito());
+        self.notice = match store.replace(record, &flagged) {
+            Ok(true) => {
+                *record = flagged;
+                None
+            }
+            Ok(false) => Some("history: no longer holds this test".into()),
+            Err(e) => Some(format!("history: {e:#}")),
         };
-        match done {
-            Ok(()) => (*kept, self.notice) = (!*kept, None),
-            Err(e) => self.notice = Some(format!("history: {e:#}")),
-        }
     }
 
     fn close_reader(&mut self) {
@@ -518,7 +522,7 @@ impl App {
                 let text = self.parked.as_ref().unwrap_or(&self.run);
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return false,
-                    KeyCode::Char('i') => self.toggle_recorded(),
+                    KeyCode::Char('i') => self.toggle_incognito(),
                     KeyCode::Char('o') => {
                         *review = if review.is_some() { None } else { Some(0) };
                     }
@@ -578,7 +582,7 @@ impl App {
                 let (layout, measure) = (self.run.layout, *measure);
                 let keys = Keys {
                     resume: text.feed.resume.is_some(),
-                    incognito: self.record.as_ref().map(|(_, kept)| *kept),
+                    incognito: self.record.as_ref().map(Record::incognito),
                     read: !text.feed.reading().passages.is_empty(),
                 };
                 let title = match cite {
@@ -593,12 +597,14 @@ impl App {
     }
 }
 
-/// Records a finished session, unless nothing was typed; the record made.
+/// Records a finished session, unless nothing was typed, flagged
+/// incognito if asked; the record made.
 fn save(
     store: Option<&Store>,
     session: &Session,
     now: Instant,
     meta: &Meta,
+    incognito: bool,
 ) -> Result<Option<Record>> {
     let Some(store) = store else { return Ok(None) };
     if session.log().is_empty() {
@@ -606,7 +612,8 @@ fn save(
     }
     let at = chrono::Local::now()
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-    let record = Record::new(session, now, at, meta.clone());
+    let mut record = Record::new(session, now, at, meta.clone());
+    record.flags.set(INCOGNITO, incognito);
     store.append(&record).map(|()| Some(record))
 }
 
@@ -621,11 +628,19 @@ fn main() -> Result<()> {
             layout,
             by,
             plot,
+            incognito,
             detailed,
             geometry,
             practice,
         }) => {
-            let view = View { by, plot, detailed, geometry, ..View::default() };
+            let view = View {
+                by,
+                plot,
+                incognito,
+                detailed,
+                geometry,
+                ..View::default()
+            };
             stats(&store, last, source.as_deref(), layout, view)?;
             if practice {
                 practice_summary(&store, last, source.as_deref())?;
@@ -706,16 +721,22 @@ fn stats(
             path.display()
         );
     }
+    let all = view.incognito;
     let records = select(history.records, last, source);
+    let (records, left_out) = counted(records, all, Record::incognito);
     let reads = reads(store.load_reads()?.records, last, source);
+    let (reads, reads_left) = counted(reads, all, ReadRecord::incognito);
+    view.left_out = left_out;
     if records.is_empty() {
-        match reads.is_empty() {
-            true => {
-                let history = store.history();
-                println!("no tests recorded in {}", history.display());
-            }
-            false => print!("{}", summary::reading(&reads)),
+        if left_out > 0 {
+            println!(
+                "only incognito tests ({left_out}): --incognito counts them"
+            );
+        } else if reads.is_empty() && reads_left == 0 {
+            let history = store.history();
+            println!("no tests recorded in {}", history.display());
         }
+        print!("{}", summary::reading(&reads, reads_left));
         return Ok(());
     }
     view.layout = layout.unwrap_or_else(|| {
@@ -725,8 +746,22 @@ fn stats(
     });
     view.colour = std::io::stdout().is_terminal();
     print!("{}", summary::render(&records, &view));
-    print!("{}", summary::reading(&reads));
+    print!("{}", summary::reading(&reads, reads_left));
     Ok(())
+}
+
+/// `records` but those `flagged` incognito, unless `all`; how many went.
+fn counted<T>(
+    mut records: Vec<T>,
+    all: bool,
+    flagged: fn(&T) -> bool,
+) -> (Vec<T>, usize) {
+    let before = records.len();
+    if !all {
+        records.retain(|r| !flagged(r));
+    }
+    let gone = before - records.len();
+    (records, gone)
 }
 
 /// The reading tests of `source` (all if `None`), the last `last` of them.
@@ -898,14 +933,11 @@ fn setup(cli: &TestArgs, store: &Store) -> Result<Setup> {
         let focus: Vec<String> = focus.iter().map(show).collect();
         what = format!("{what} · {}", focus.join(" "));
     }
-    let mut title = match limit {
+    let title = match limit {
         Limit::Words(n) => format!("{what} · {n} words"),
         Limit::Time(d) => format!("{what} · {}s", d.as_secs()),
         Limit::Passage => format!("{what} · one passage"),
     };
-    if cli.incognito {
-        title.push_str(" · incognito");
-    }
     let layout = cli.layout.unwrap_or_else(|| Layout::detect(source.words()));
     let meta = Meta {
         source: name,
@@ -1524,11 +1556,14 @@ mod tests {
                 layout: None,
                 by: None,
                 plot: Plot::Steps,
+                incognito: false,
                 detailed: false,
                 geometry: false,
                 practice: false,
             })
         );
+        let all = parse(&["stats", "--incognito"]).unwrap().cmd;
+        assert!(matches!(all, Some(Cmd::Stats { incognito: true, .. })));
         let ribbon = parse(&["stats", "--plot", "ribbon"]).unwrap().cmd;
         assert!(matches!(ribbon, Some(Cmd::Stats { plot: Plot::Ribbon, .. })));
         assert!(parse(&["stats", "-w", "10"]).is_err());
@@ -2047,36 +2082,50 @@ mod tests {
     }
 
     #[test]
-    fn incognito_records_nothing_but_still_practises_on_history() {
+    fn incognito_records_flagged_and_still_practises_on_history() {
         let tmp = TempDir::new("incognito");
         let store = slow_qu(&tmp);
 
         let args = cli(&["-i", "-w", "9"]);
         assert!(args.incognito);
-        assert!(setup(&args, &no_home()).unwrap().title.ends_with("incognito"));
         assert!(cli(&["--inkognito"]).incognito);
         let mut setup = test_setup(words("ab cd"), Limit::Words(2));
         setup.meta.source = "t".into();
         setup.incognito = true;
         let mut app = App::new(setup, Some(store.clone()));
+        assert_eq!(app.title(), "t · incognito", "while typing too");
         for c in "ab cd".chars() {
             press(&mut app, KeyCode::Char(c));
         }
         assert!(matches!(app.screen, Screen::Results { .. }));
         assert!(app.notice.is_none());
-        assert_eq!(store.load().unwrap().records.len(), 1, "not recorded");
+        let records = store.load().unwrap().records;
+        assert_eq!(records.len(), 2);
+        assert!(!records[0].incognito() && records[1].incognito());
         press(&mut app, KeyCode::Char('p'));
         assert_eq!(app.run.meta.mode, "practice");
         press(&mut app, KeyCode::Char('x'));
         press(&mut app, KeyCode::Esc);
-        assert_eq!(store.load().unwrap().records.len(), 1, "nor practice");
+        let records = store.load().unwrap().records;
+        assert!(records[2].incognito(), "practice too");
     }
 
     #[test]
-    fn i_takes_the_shown_test_out_of_the_history_and_back() {
+    fn counted_leaves_out_the_flagged_unless_all() {
+        let flagged = |n: &u8| *n > 1;
+        assert_eq!(counted(vec![1, 2, 3, 1], false, flagged), (vec![1, 1], 2));
+        assert_eq!(counted(vec![1, 2], true, flagged), (vec![1, 2], 0));
+        assert_eq!(counted(Vec::new(), false, flagged), (vec![], 0));
+    }
+
+    #[test]
+    fn i_flags_the_shown_test_incognito_and_back() {
         let tmp = TempDir::new("after");
         let store = Store::at(&tmp.0);
         let recorded = || store.load().unwrap().records;
+        let flagged = || -> Vec<bool> {
+            recorded().iter().map(Record::incognito).collect()
+        };
         let setup = test_setup(words("ab cd"), Limit::Words(1));
         let mut app = App::new(setup, Some(store.clone()));
         let type_out = |app: &mut App| {
@@ -2088,10 +2137,10 @@ mod tests {
         press(&mut app, KeyCode::Char('r'));
         type_out(&mut app);
         let both = recorded();
-        assert_eq!(both.len(), 2);
+        assert_eq!(flagged(), vec![false, false]);
 
         press(&mut app, KeyCode::Char('i'));
-        assert_eq!(recorded(), both[..1], "the earlier test stays");
+        assert_eq!(flagged(), vec![false, true], "nothing deleted");
         assert_eq!(app.title(), "t · incognito");
         assert!(app.notice.is_none());
         press(&mut app, KeyCode::Char('i'));
@@ -2100,17 +2149,23 @@ mod tests {
 
         press(&mut app, KeyCode::Char('i'));
         press(&mut app, KeyCode::Char('r'));
-        assert_eq!(app.title(), "t", "a new test is recorded again");
+        assert_eq!(app.title(), "t", "a new test counts again");
         type_out(&mut app);
-        assert_eq!(recorded().len(), 2);
+        assert_eq!(flagged(), vec![false, true, false]);
 
         let mut setup = test_setup(words("ab"), Limit::Words(1));
         setup.incognito = true;
         let mut app = App::new(setup, Some(store.clone()));
         type_out(&mut app);
+        assert_eq!(flagged(), vec![false, true, false, true]);
         press(&mut app, KeyCode::Char('i'));
-        assert_eq!(recorded().len(), 2, "nothing to take out or put back");
-        assert!(app.record.is_none());
+        assert_eq!(flagged(), vec![false, true, false, false]);
+        assert_eq!(app.title(), "t");
+
+        fs::remove_file(store.history()).unwrap();
+        press(&mut app, KeyCode::Char('i'));
+        assert!(app.notice.is_some(), "a test gone from the history");
+        assert!(!app.record.as_ref().unwrap().incognito());
     }
 
     #[test]

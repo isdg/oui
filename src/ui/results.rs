@@ -22,8 +22,8 @@ const TOP: usize = 5;
 pub struct Keys {
     /// `c` continues the text.
     pub resume: bool,
-    /// `i` takes the test out of the history if it is in it (`true`), or
-    /// puts it back.
+    /// `i` flags the recorded test incognito, or (`true`, it is) counts it
+    /// again.
     pub incognito: Option<bool>,
     /// `O` opens the work to read.
     pub read: bool,
@@ -77,8 +77,8 @@ pub fn draw(
     }
     let go_on = if offered.resume { "c continue · " } else { "" };
     let incognito = match offered.incognito {
-        Some(true) => "i incognito · ",
-        Some(false) => "i record · ",
+        Some(false) => "i incognito · ",
+        Some(true) => "i count · ",
         None => "",
     };
     let read = if offered.read { "O read · " } else { "" };
@@ -278,11 +278,11 @@ mod tests {
             rows.join("\n")
         };
         let all =
-            draw(Keys { resume: true, incognito: Some(true), read: true });
+            draw(Keys { resume: true, incognito: Some(false), read: true });
         assert!(all.contains("r new test · c continue · p practice"));
         assert!(all.contains("o text · O read · i incognito · q quit"));
-        let out = draw(Keys { incognito: Some(false), ..Keys::default() });
-        assert!(out.contains("o text · i record · q quit"), "{out}");
+        let out = draw(Keys { incognito: Some(true), ..Keys::default() });
+        assert!(out.contains("o text · i count · q quit"), "{out}");
         let screen = draw(Keys::default());
         assert!(!screen.contains("continue"), "{screen}");
         assert!(screen.contains("o text · q quit"), "{screen}");

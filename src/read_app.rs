@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
-use oui::history::Store;
+use oui::history::{Store, INCOGNITO};
 use oui::probes::{self, Probe};
 use oui::read::{Input, Origin, ReadTest, Stage, Text, PROBES, WORDS};
 use oui::reads::{ReadRecord, View};
@@ -245,7 +245,8 @@ struct App {
     seen: Seen,
     plan: Plan,
     test: ReadTest,
-    /// The finished test, and whether the history holds it.
+    /// The finished test, and whether the history holds it: `i` flags it
+    /// incognito there and back.
     record: Option<(ReadRecord, bool)>,
     notice: Option<String>,
     /// The terminal's columns and rows, as last drawn.
@@ -304,9 +305,11 @@ impl App {
     fn finish(&mut self) {
         let at = chrono::Local::now()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
-        let record = self.test.record(at, self.plan.origin.clone(), self.size);
+        let mut record =
+            self.test.record(at, self.plan.origin.clone(), self.size);
+        record.flags.set(INCOGNITO, self.args.incognito);
         self.seen.reads.push(record.clone());
-        let store = self.store.as_ref().filter(|_| !self.args.incognito);
+        let store = self.store.as_ref();
         let kept = match store.map(|s| s.append_read(&record)) {
             Some(Ok(())) => true,
             Some(Err(e)) => {
@@ -318,21 +321,24 @@ impl App {
         self.record = Some((record, kept));
     }
 
-    /// Takes the test on the results out of the history, or puts it back.
-    fn toggle_recorded(&mut self) {
-        let (Some(store), Some((record, kept))) =
+    /// Flags the test on the results incognito in the history, or clears
+    /// the flag.
+    fn toggle_incognito(&mut self) {
+        let (Some(store), Some((record, true))) =
             (&self.store, &mut self.record)
         else {
             return;
         };
-        let done = match *kept {
-            true => store.remove_read(record).map(drop),
-            false => store.append_read(record),
+        let mut flagged = record.clone();
+        flagged.flags.set(INCOGNITO, !record.incognito());
+        self.notice = match store.replace_read(record, &flagged) {
+            Ok(true) => {
+                *record = flagged;
+                None
+            }
+            Ok(false) => Some("history: no longer holds this test".into()),
+            Err(e) => Some(format!("history: {e:#}")),
         };
-        match done {
-            Ok(()) => (*kept, self.notice) = (!*kept, None),
-            Err(e) => self.notice = Some(format!("history: {e:#}")),
-        }
     }
 
     /// Handles a key press; returns false to quit.
@@ -351,7 +357,7 @@ impl App {
                 None
             }
             (Stage::Done, Char('i')) => {
-                self.toggle_recorded();
+                self.toggle_incognito();
                 None
             }
             (Stage::Done | Stage::Ready, Char('q')) | (_, Esc) => return false,
@@ -394,11 +400,16 @@ impl App {
 
     fn title(&self) -> String {
         let title = self.plan.title();
-        match self.args.pace() {
+        let mut title = match self.args.pace() {
             Some((pace, View::Slide)) => format!("{title} · {pace} wpm"),
             Some((pace, View::Blink)) => format!("{title} · {pace} wpm blink"),
             None => title,
+        };
+        let flagged = self.record.as_ref().map(|(r, _)| r.incognito());
+        if flagged.unwrap_or(self.args.incognito) {
+            title.push_str(" · incognito");
         }
+        title
     }
 
     /// How long to wait for a key before drawing again.
@@ -438,8 +449,8 @@ impl App {
                     None => title,
                 };
                 let notice = self.notice.as_deref();
-                let kept = self.store.as_ref().map(|_| *kept);
-                ui::read::results(frame, record, &title, notice, kept)
+                let incognito = kept.then(|| record.incognito());
+                ui::read::results(frame, record, &title, notice, incognito)
             }
             (Stage::Done, None) => {}
         }
@@ -652,18 +663,24 @@ mod tests {
     }
 
     #[test]
-    fn incognito_keeps_the_test_out_until_i_records_it() {
+    fn incognito_flags_the_test_until_i_counts_it() {
         let tmp = TempDir::new("incognito");
         let file = book(&tmp.0, 30);
         let store = Store::at(tmp.0.join("home"));
         let args = ReadArgs { incognito: true, ..args(&file, 80) };
         let mut app = App::new(args, None, Some(store.clone())).unwrap();
+        let flagged = || {
+            let records = store.load_reads().unwrap().records;
+            records.iter().map(ReadRecord::incognito).collect::<Vec<_>>()
+        };
+        assert!(app.title().ends_with(" · incognito"));
         read_through(&mut app);
-        assert!(store.load_reads().unwrap().records.is_empty());
+        assert_eq!(flagged(), [true]);
         press(&mut app, KeyCode::Char('i'));
-        assert_eq!(store.load_reads().unwrap().records.len(), 1);
+        assert_eq!(flagged(), [false]);
+        assert!(!app.title().ends_with(" · incognito"));
         press(&mut app, KeyCode::Char('i'));
-        assert!(store.load_reads().unwrap().records.is_empty());
+        assert_eq!(flagged(), [true]);
         press(&mut app, KeyCode::Char('r'));
         assert_eq!(app.plan.origin.start, 80, "read all the same");
     }

@@ -70,8 +70,8 @@ Flags:
     -t, --time        Make it a timed test of this many seconds.
     -k, --layout      Heatmap layout: qwerty or jcuken (alias йцукен);
                       detected from the words when omitted.
-    -i, --incognito   Record nothing: the tests stay out of the history and
-                      oui stats.
+    -i, --incognito   Record the tests flagged incognito: oui stats leaves
+                      them out, practice and -c still use them.
     -c, --continue    Go on from where the last recorded test of FILE, else
                       of text mode, stopped, in that test's mode, language
                       and --plain; -m, -l and -P pick which test to go on
@@ -99,8 +99,8 @@ While typing:
 On the results screen, tab flips the heatmap between errors and speed, o
 shows the text you typed -- hits green, misses red, the rest dimmed, with
 its citation; up/down scroll it and o goes back -- r starts a new test, p
-starts practice, i takes the test just typed out of the history -- and i
-again puts it back -- and q quits. For a text or a file, c continues it:
+starts practice, i flags the test just typed incognito -- and i again
+counts it -- and q quits. For a text or a file, c continues it:
 the next test starts where this one stopped, so a text can be read through
 passage by passage. A new text test starts on a random passage of a work
 picked at random, so a work that comes up again rarely opens the same way.
@@ -176,8 +176,8 @@ The results give the speed twice: WPM at five characters a word, as typing
 tests count, and words as written a minute, as reading rates are published
 (about 240 for English non-fiction). A test counts when 8 of 10 sentences
 are told right; guessing gets there one time in eighteen, so trust the
-rate over many tests more than any one. r reads on, i takes the test out
-of the history or puts it back.
+rate over many tests more than any one. r reads on, i flags the test
+incognito or counts it again.
 
 A FILE of running prose -- a book from Project Gutenberg, an article -- is
 the text to measure with: each test reads on from where the last one
@@ -218,8 +218,9 @@ HISTORY AND STATS
 
 Every test that saw a keystroke is appended to ~/.oui/history.jsonl as it
 ends: a summary plus the raw keystrokes, so any statistic can be recomputed
-later; -i runs tests that are not recorded, though practice still draws on
-what was. oui stats reads it back:
+later. A test flagged incognito, by -i or by i on its results, stays in
+the history with "flags": ["incognito"]: practice and -c draw on it, oui
+stats leaves it out unless given --incognito. oui stats reads it back:
 
     > oui stats                     # all tests: stats, WPM per test, texts
     > oui stats -d                  # plus heatmaps and key and bigram
@@ -227,6 +228,7 @@ what was. oui stats reads it back:
     > oui stats -n 20 -s russian    # the last 20 Russian tests
     > oui stats --by week           # a table of weeks, WPM plotted per week
     > oui stats --plot ribbon       # WPM as a median and its spread
+    > oui stats --incognito         # incognito tests counted too
     > oui stats --geometry          # plus fingers, rows and hand moves
     > oui stats --practice          # plus what -p targets, and its words
 

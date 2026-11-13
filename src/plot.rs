@@ -61,13 +61,25 @@ pub fn line_chart_from(
         }
     }
 
-    let mut lines = Vec::with_capacity(height + 1);
-    for (r, gridrow) in grid.iter().enumerate() {
+    let text = grid.iter().map(|row| row.iter().collect()).collect();
+    frame(&ticks, text, width, label_width, fmt)
+}
+
+/// `rows` behind a y-axis labelled with `ticks`, top first, the last of
+/// them under the bottom rule `width` columns long.
+pub fn frame(
+    ticks: &[u64],
+    rows: Vec<String>,
+    width: usize,
+    label_width: usize,
+    fmt: &dyn Fn(u64) -> String,
+) -> Vec<String> {
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    for (r, row) in rows.iter().enumerate() {
         let sep = if r == 0 { '┼' } else { '┤' };
-        let mut line = format!("{:>label_width$} {sep}", fmt(ticks[r]));
-        line.extend(gridrow);
-        lines.push(line);
+        lines.push(format!("{:>label_width$} {sep}{row}", fmt(ticks[r])));
     }
+    let lo = ticks.last().copied().unwrap_or(0);
     let mut bottom = format!("{:>label_width$} └", fmt(lo));
     bottom.extend(std::iter::repeat_n('─', width));
     lines.push(bottom);

@@ -286,7 +286,9 @@ random words, or the whole text for a file; `-t` switches to a timed test.
   optional field, so older readers and records are unaffected.
 - `oui stats` combines the records: a `plc stat`-style block, WPM per test
   and the recent texts; `--detailed` adds both heatmaps over every
-  keystroke and the rankings.
+  keystroke and the rankings. `--plot dots` and `--plot ribbon` draw WPM
+  on a braille canvas (2×4 dots a cell) for four times the vertical
+  resolution of the box-drawing line, labels a whole step apart.
 - `--geometry` adds the key and bigram tallies summed per finger, row and
   hand move. Fingers follow touch typing on the ANSI board, keyed by
   physical position, so every layout shares them. The fingering the

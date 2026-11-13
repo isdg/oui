@@ -21,6 +21,10 @@ use crate::ui::{results, show};
 /// Widest the per-test plot grows before neighbouring tests are averaged.
 const PLOT_COLS: usize = 70;
 const PLOT_ROWS: usize = 8;
+/// A ribbon's window reaches 1/N of the values either side, 2 at least.
+const RIBBON_SPAN: usize = 40;
+/// The dim grey a ribbon's band is drawn in.
+const BAND_COLOUR: u8 = 239;
 /// Widest a line of practice words grows.
 const WORDS_WIDTH: usize = 80;
 /// Columns each ranking takes when printed side by side.
@@ -62,6 +66,19 @@ impl Period {
     }
 }
 
+/// How `oui stats --plot` draws WPM over time.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Plot {
+    /// A stepped line of box-drawing characters.
+    #[default]
+    Steps,
+    /// A braille line: four times the rows and twice the columns.
+    Dots,
+    /// In braille, the rolling median over the middle half of the tests
+    /// around it.
+    Ribbon,
+}
+
 /// What `oui stats` shows beyond the summary, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct View {
@@ -71,6 +88,8 @@ pub struct View {
     pub colour: bool,
     /// Adds a table of periods and plots WPM per period, not per test.
     pub by: Option<Period>,
+    /// How WPM over time is drawn.
+    pub plot: Plot,
     /// Adds the heatmaps and the key and bigram rankings.
     pub detailed: bool,
     /// Adds the fingers, rows and hand moves.
@@ -132,7 +151,8 @@ pub fn render(records: &[Record], view: &View) -> String {
                 .map(|r| vec![shown(&r.meta)])
                 .collect();
             let modes = view.colour.then_some(modes.as_slice());
-            out.push_str(&wpm_plot("per completed test", &wpms, modes));
+            let title = "per completed test";
+            out.push_str(&wpm_plot(title, &wpms, modes, view.plot));
         }
         Some(period) => {
             let groups = group(records, period);
@@ -143,7 +163,7 @@ pub fn render(records: &[Record], view: &View) -> String {
                 .unzip();
             let modes = view.colour.then_some(modes.as_slice());
             let title = format!("mean per {}", period.name());
-            out.push_str(&wpm_plot(&title, &means, modes));
+            out.push_str(&wpm_plot(&title, &means, modes, view.plot));
         }
     }
     out.push_str(&recent_texts(records));
@@ -549,34 +569,31 @@ fn capitalise(word: &str) -> String {
 /// The WPM trend, with the same scale in CPM down its right side; with
 /// `modes`, the tests behind each value, every column is drawn in the
 /// colour of the mode most of its tests were in.
-fn wpm_plot(title: &str, wpms: &[f64], modes: Option<&[Vec<&str>]>) -> String {
+fn wpm_plot(
+    title: &str,
+    wpms: &[f64],
+    modes: Option<&[Vec<&str>]>,
+    style: Plot,
+) -> String {
+    let half = (wpms.len() / RIBBON_SPAN).max(2);
+    let title = match style {
+        Plot::Ribbon => {
+            format!("{title} · median and middle half of {}", 2 * half + 1)
+        }
+        _ => title.to_string(),
+    };
     let mut out = format!("\n          wpm · cpm at right — {title}\n\n");
     if wpms.is_empty() {
         out.push_str("          (no data)\n");
         return out;
     }
-    let samples = plot::resample(wpms, PLOT_COLS);
-    let values: Vec<u64> = samples.iter().map(|v| v.round() as u64).collect();
-    let max = values.iter().copied().max().unwrap_or(0);
-    // From the slowest value's ten, not zero: a trend spans a few WPM.
-    let lo = values.iter().copied().min().unwrap_or(0) / 10 * 10;
-    let fmt = |v: u64| v.to_string();
-    let label = max.max(lo + 1).to_string().len().max(lo.to_string().len());
-    let shown: Vec<&str> = match modes {
-        Some(modes) => plot::buckets(modes.len(), PLOT_COLS)
-            .map(|b| dominant(&modes[b].concat()))
-            .collect(),
-        None => Vec::new(),
+    let chart = match style {
+        Plot::Steps => steps(wpms, modes),
+        Plot::Dots => dots(wpms, modes),
+        Plot::Ribbon => ribbon(wpms, modes, half),
     };
-    let columns: Vec<Option<u8>> =
-        shown.iter().map(|m| Some(mode_colour(m))).collect();
-    let lines = plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt);
-    let ticks = plot::ticks(lo, max, PLOT_ROWS);
-    for (row, (line, wpm)) in lines.iter().zip(ticks).enumerate() {
-        let line = match row < PLOT_ROWS {
-            true => plot::tint(line, label + 2, &columns),
-            false => line.clone(),
-        };
+    let rows = chart.lines.iter().zip(chart.ticks);
+    for (row, (line, wpm)) in rows.enumerate() {
         let sep = match row {
             0 => '┼',
             PLOT_ROWS => '┘',
@@ -585,12 +602,11 @@ fn wpm_plot(title: &str, wpms: &[f64], modes: Option<&[Vec<&str>]>) -> String {
         let cpm = wpm * CHARS_PER_WORD as u64;
         let _ = writeln!(out, "     {line}{sep} {cpm}");
     }
-    let per_col = wpms.len() as f64 / values.len() as f64;
-    let axis = plot::axis(label + 2, values.len(), per_col);
+    let axis = plot::axis(chart.label + 2, chart.cols, chart.per_col);
     let _ = writeln!(out, "{}", format!("     {axis}").trim_end());
     if modes.is_some() {
         let mut seen: Vec<&str> = Vec::new();
-        for mode in shown {
+        for mode in chart.shown {
             if !seen.contains(&mode) {
                 seen.push(mode);
             }
@@ -599,10 +615,144 @@ fn wpm_plot(title: &str, wpms: &[f64], modes: Option<&[Vec<&str>]>) -> String {
             plot::tint(&format!("● {m}"), 0, &[Some(mode_colour(m))])
         };
         let keys: Vec<String> = seen.iter().map(key).collect();
-        let _ =
-            writeln!(out, "\n{}{}", " ".repeat(label + 7), keys.join("   "));
+        let indent = " ".repeat(chart.label + 7);
+        let _ = writeln!(out, "\n{indent}{}", keys.join("   "));
     }
     out
+}
+
+/// A plot's framed rows and what goes around them.
+struct Chart<'a> {
+    /// The plotted rows, then the bottom rule.
+    lines: Vec<String>,
+    /// The WPM each of `lines` is labelled with.
+    ticks: Vec<u64>,
+    /// Width of the labels left of the plot.
+    label: usize,
+    cols: usize,
+    /// Values each column stands for.
+    per_col: f64,
+    /// The mode each column is drawn in, when coloured.
+    shown: Vec<&'a str>,
+}
+
+/// The mode most tests were in behind each column, when `modes` are
+/// split into `points` as `plot::resample` splits values, `per` a column.
+fn dominant_per<'a>(
+    modes: Option<&[Vec<&'a str>]>,
+    points: usize,
+    per: usize,
+) -> Vec<&'a str> {
+    let Some(modes) = modes else { return Vec::new() };
+    let points: Vec<_> = plot::buckets(modes.len(), points).collect();
+    let column = |c: &[std::ops::Range<usize>]| {
+        dominant(&modes[c[0].start..c[c.len() - 1].end].concat())
+    };
+    points.chunks(per).map(column).collect()
+}
+
+fn steps<'a>(wpms: &[f64], modes: Option<&[Vec<&'a str>]>) -> Chart<'a> {
+    let samples = plot::resample(wpms, PLOT_COLS);
+    let values: Vec<u64> = samples.iter().map(|v| v.round() as u64).collect();
+    let max = values.iter().copied().max().unwrap_or(0);
+    // From the slowest value's ten, not zero: a trend spans a few WPM.
+    let lo = values.iter().copied().min().unwrap_or(0) / 10 * 10;
+    let fmt = |v: u64| v.to_string();
+    let label = max.max(lo + 1).to_string().len().max(lo.to_string().len());
+    let shown = dominant_per(modes, PLOT_COLS, 1);
+    let columns: Vec<Option<u8>> =
+        shown.iter().map(|m| Some(mode_colour(m))).collect();
+    let lines = plot::line_chart_from(lo, max, PLOT_ROWS, &values, &fmt);
+    let lines = lines.iter().enumerate().map(|(row, line)| match row {
+        PLOT_ROWS => line.clone(),
+        _ => plot::tint(line, label + 2, &columns),
+    });
+    Chart {
+        lines: lines.collect(),
+        ticks: plot::ticks(lo, max, PLOT_ROWS),
+        label,
+        cols: values.len(),
+        per_col: wpms.len() as f64 / values.len() as f64,
+        shown,
+    }
+}
+
+/// The trend as a braille line, two values to a column.
+fn dots<'a>(wpms: &[f64], modes: Option<&[Vec<&'a str>]>) -> Chart<'a> {
+    let points = plot::resample(wpms, PLOT_COLS * 2);
+    let (lo, step) = plot::scale(least(&points), most(&points), PLOT_ROWS);
+    let ys: Vec<usize> =
+        points.iter().map(|&v| plot::dot(v, lo, step, PLOT_ROWS)).collect();
+    let mut canvas = plot::Canvas::new(points.len(), PLOT_ROWS);
+    canvas.trace(&ys);
+    braille(&canvas, (lo, step), wpms.len(), modes)
+}
+
+/// The rolling median of `half` values either side, in braille over a
+/// band from the lower quartile to the upper.
+fn ribbon<'a>(
+    wpms: &[f64],
+    modes: Option<&[Vec<&'a str>]>,
+    half: usize,
+) -> Chart<'a> {
+    let spread = plot::spread(wpms, PLOT_COLS * 2, half);
+    let low: Vec<f64> = spread.iter().map(|q| q[0]).collect();
+    let high: Vec<f64> = spread.iter().map(|q| q[2]).collect();
+    let (lo, step) = plot::scale(least(&low), most(&high), PLOT_ROWS);
+    let y = |v: f64| plot::dot(v, lo, step, PLOT_ROWS);
+    let mut canvas = plot::Canvas::new(spread.len(), PLOT_ROWS);
+    for (x, &[low, _, high]) in spread.iter().enumerate() {
+        canvas.fill(x, y(low), y(high));
+    }
+    let median: Vec<usize> = spread.iter().map(|q| y(q[1])).collect();
+    canvas.trace(&median);
+    braille(&canvas, (lo, step), wpms.len(), modes)
+}
+
+/// `canvas`, two of the points `n` values were resampled to a column,
+/// framed on the scale `(lo, step)`. In colour its line takes the modes
+/// and its band stays grey; without, the line is cut out of the band.
+fn braille<'a>(
+    canvas: &plot::Canvas,
+    (lo, step): (u64, u64),
+    n: usize,
+    modes: Option<&[Vec<&'a str>]>,
+) -> Chart<'a> {
+    let (cols, points) = (canvas.cols(), n.min(PLOT_COLS * 2));
+    let shown = dominant_per(modes, points, 2);
+    let tint = |(row, line): (String, Vec<bool>)| {
+        if modes.is_none() {
+            return row;
+        }
+        let colour = |(&hot, mode): (&bool, &&str)| match hot {
+            true => Some(mode_colour(mode)),
+            false => Some(BAND_COLOUR),
+        };
+        let colours: Vec<_> = line.iter().zip(&shown).map(colour).collect();
+        plot::tint(&row, 0, &colours)
+    };
+    let rows = canvas.render(modes.is_none()).into_iter().map(tint);
+    let top = PLOT_ROWS as u64;
+    let mut ticks: Vec<u64> = (0..top).map(|r| lo + step * (top - r)).collect();
+    ticks.push(lo);
+    let label = ticks[0].to_string().len();
+    let fmt = |v: u64| v.to_string();
+    Chart {
+        lines: plot::frame(&ticks, rows.collect(), cols, label, &fmt),
+        ticks,
+        label,
+        cols,
+        per_col: 2.0 * n as f64 / points as f64,
+        shown,
+    }
+}
+
+fn least(values: &[f64]) -> f64 {
+    values.iter().copied().fold(f64::INFINITY, f64::min)
+}
+
+fn most(values: &[f64]) -> f64 {
+    values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
 }
 
 /// The mode most of `modes` are in; ties go to the earliest.
@@ -953,15 +1103,74 @@ mod tests {
         };
         assert!(out.contains(&line("WPM", wpm)), "{out}");
         assert!(out.contains(&line("CPM", cpm)), "{out}");
-        let plot: Vec<&str> =
-            out.lines().filter(|l| l.contains(['┤', '┼', '└'])).collect();
-        assert_eq!(plot.len(), PLOT_ROWS + 1, "{out}");
-        for row in plot {
-            let ends: Vec<&str> = row.split_whitespace().collect();
-            let wpm: u64 = ends[0].parse().unwrap();
-            let cpm: u64 = ends.last().unwrap().parse().unwrap();
-            assert_eq!(cpm, wpm * 5, "{row}");
+        for plot in [Plot::Steps, Plot::Dots, Plot::Ribbon] {
+            let out = render(&records, &View { plot, ..summary() });
+            let rows: Vec<&str> =
+                out.lines().filter(|l| l.contains(['┤', '┼', '└'])).collect();
+            assert_eq!(rows.len(), PLOT_ROWS + 1, "{out}");
+            for row in rows {
+                let ends: Vec<&str> = row.split_whitespace().collect();
+                let wpm: u64 = ends[0].parse().unwrap();
+                let cpm: u64 = ends.last().unwrap().parse().unwrap();
+                assert_eq!(cpm, wpm * 5, "{row}");
+            }
         }
+    }
+
+    fn plotted(out: &str) -> Vec<&str> {
+        let rows = out.lines().filter(|l| l.contains(['┤', '┼']));
+        rows.map(|l| l.split(['┤', '┼', '├']).nth(1).unwrap()).collect()
+    }
+
+    #[test]
+    fn braille_plots_put_labels_a_whole_step_apart() {
+        let records: Vec<Record> = (0..30)
+            .map(|i| {
+                let mut r =
+                    record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00");
+                r.wpm = 50.0 + i as f64;
+                r
+            })
+            .collect();
+        for plot in [Plot::Dots, Plot::Ribbon] {
+            let out = render(&records, &View { plot, ..summary() });
+            let labels: Vec<u64> = out
+                .lines()
+                .filter(|l| l.contains(['┤', '┼', '└']))
+                .map(|l| l.split_whitespace().next().unwrap().parse().unwrap())
+                .collect();
+            let steps: Vec<u64> =
+                labels.windows(2).map(|w| w[0] - w[1]).collect();
+            assert!(steps.windows(2).all(|w| w[0] == w[1]), "{out}");
+            assert!(labels[PLOT_ROWS] <= 50 && labels[0] >= 79, "{out}");
+            let rows = plotted(&out);
+            assert!(rows.iter().all(|r| r.chars().count() == 15), "{out}");
+            assert!(rows.iter().all(|r| r.chars().all(|c| {
+                c == ' ' || ('\u{2800}'..='\u{28ff}').contains(&c)
+            })));
+        }
+        let dots = render(&records, &View { plot: Plot::Dots, ..summary() });
+        let rows = plotted(&dots);
+        assert!(rows[0].ends_with('⠔') && rows[PLOT_ROWS - 1].starts_with('⠔'));
+    }
+
+    #[test]
+    fn a_ribbon_names_its_window_and_colours_its_band_grey() {
+        let records: Vec<Record> = (0..200)
+            .map(|i| {
+                let mut r =
+                    record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00");
+                r.wpm = 60.0 + (i % 7) as f64;
+                r
+            })
+            .collect();
+        let view = View { plot: Plot::Ribbon, ..summary() };
+        let out = render(&records, &view);
+        assert!(out.contains("median and middle half of 11"), "{out}");
+        assert!(!out.contains('\x1b'));
+        let out = render(&records, &View { colour: true, ..view });
+        assert!(out.contains("\x1b[38;5;239m"), "{out}");
+        assert!(out.contains("\x1b[38;5;243m"), "{out}");
     }
 
     #[test]

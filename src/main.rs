@@ -26,7 +26,7 @@ use oui::practice::{self, Target};
 use oui::reads::ReadRecord;
 use oui::session::{Input, Session};
 use oui::stats::Report;
-use oui::summary::{self, Period, View};
+use oui::summary::{self, Period, Plot, View};
 use oui::ui;
 use oui::ui::reader::{Reading, Scroll};
 use oui::ui::results::Keys;
@@ -106,6 +106,9 @@ enum Cmd {
         /// plotted per period instead of per test.
         #[arg(short, long, value_enum)]
         by: Option<Period>,
+        /// How WPM over time is drawn.
+        #[arg(long, value_enum, default_value_t)]
+        plot: Plot,
         /// Add the heatmaps and the key and bigram rankings.
         #[arg(short, long)]
         detailed: bool,
@@ -617,11 +620,12 @@ fn main() -> Result<()> {
             source,
             layout,
             by,
+            plot,
             detailed,
             geometry,
             practice,
         }) => {
-            let view = View { by, detailed, geometry, ..View::default() };
+            let view = View { by, plot, detailed, geometry, ..View::default() };
             stats(&store, last, source.as_deref(), layout, view)?;
             if practice {
                 practice_summary(&store, last, source.as_deref())?;
@@ -1519,11 +1523,14 @@ mod tests {
                 source: Some("russian".into()),
                 layout: None,
                 by: None,
+                plot: Plot::Steps,
                 detailed: false,
                 geometry: false,
                 practice: false,
             })
         );
+        let ribbon = parse(&["stats", "--plot", "ribbon"]).unwrap().cmd;
+        assert!(matches!(ribbon, Some(Cmd::Stats { plot: Plot::Ribbon, .. })));
         assert!(parse(&["stats", "-w", "10"]).is_err());
         let by = parse(&["stats", "--by", "week"]).unwrap().cmd;
         assert!(matches!(by, Some(Cmd::Stats { by: Some(Period::Week), .. })));

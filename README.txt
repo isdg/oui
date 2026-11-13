@@ -226,6 +226,7 @@ what was. oui stats reads it back:
                                     # rankings
     > oui stats -n 20 -s russian    # the last 20 Russian tests
     > oui stats --by week           # a table of weeks, WPM plotted per week
+    > oui stats --plot ribbon       # WPM as a median and its spread
     > oui stats --geometry          # plus fingers, rows and hand moves
     > oui stats --practice          # plus what -p targets, and its words
 
@@ -235,6 +236,14 @@ accuracy per period, with the plot showing the mean per period instead of
 every test. Its y-axis starts at the slowest value's ten, not at zero, so a
 trend of a few WPM stays visible. The same scale runs down its right side
 in CPM, characters a minute: five to the word of WPM.
+
+--plot steps|dots|ribbon picks how WPM is drawn. steps (the default) is a
+line of box-drawing characters, one level a row. dots draws it in braille,
+four levels a row and two values a column, its rows a whole number of WPM
+apart from the tightest floor that fits. ribbon draws, on the same scale,
+the rolling median over a band from the lower quartile to the upper,
+reaching a fortieth of the values (two at least) either side; in colour the
+band is grey, without it the median is cut out of the band.
 
 Text-mode tests are recorded with their passage's citation, and oui stats
 lists the last ten under Recent texts: when, how fast, how accurate, and

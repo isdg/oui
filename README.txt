@@ -251,7 +251,8 @@ band is grey, without it the median is cut out of the band.
 
 Text-mode tests are recorded with their passage's citation, and oui stats
 lists the last ten under Recent texts: when, how fast, how accurate, and
-what it was.
+what it was. Tests it leaves out are listed all the same, marked incognito
+or stopped.
 
 Rhythm is the mean gap between keys, its standard deviation within each
 test, and that deviation as a share of the mean: the higher it is, the more

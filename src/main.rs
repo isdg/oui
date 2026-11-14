@@ -717,8 +717,8 @@ fn stats(
         );
     }
     let all = view.all;
-    let records = select(history.records, last, source);
-    let (records, left_out) = counted(records, all, LeftOut::test);
+    let typed = select(history.records, last, source);
+    let (records, left_out) = counted(typed.clone(), all, LeftOut::test);
     let reads = reads(store.load_reads()?.records, last, source);
     let (reads, reads_left) = counted(reads, all, LeftOut::read);
     view.left_out = left_out;
@@ -738,7 +738,7 @@ fn stats(
         Layout::detect(&words)
     });
     view.colour = std::io::stdout().is_terminal();
-    print!("{}", summary::render(&records, &view));
+    print!("{}", summary::render(&records, &typed, &view));
     print!("{}", summary::reading(&reads, reads_left));
     Ok(())
 }

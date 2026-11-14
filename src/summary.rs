@@ -146,8 +146,9 @@ pub struct View {
     pub geometry: bool,
 }
 
-/// The summary up to the recent texts, then what `view` adds.
-pub fn render(records: &[Record], view: &View) -> String {
+/// The summary of `records` up to the recent texts, which list `typed`,
+/// left-out tests marked; then what `view` adds.
+pub fn render(records: &[Record], typed: &[Record], view: &View) -> String {
     let reports: Vec<Report> = records.iter().map(Record::report).collect();
     let all = stats::combine(&reports);
     let wpms: Vec<f64> =
@@ -219,7 +220,7 @@ pub fn render(records: &[Record], view: &View) -> String {
             out.push_str(&wpm_plot(&title, &means, modes, view.plot));
         }
     }
-    out.push_str(&recent_texts(records));
+    out.push_str(&recent_texts(typed));
     if view.detailed {
         out.push_str(&details(&all, view));
     }
@@ -257,9 +258,15 @@ fn details(all: &Report, view: &View) -> String {
 fn recent_texts(records: &[Record]) -> String {
     let cited = records.iter().rev().filter_map(|r| {
         let cite = r.meta.cite.as_deref()?;
-        let stopped = if r.completed { "" } else { "  (stopped)" };
+        let marks = [(r.incognito(), "incognito"), (!r.completed, "stopped")];
+        let marks: Vec<&str> =
+            marks.iter().filter(|(on, _)| *on).map(|(_, m)| *m).collect();
+        let marks = match marks.is_empty() {
+            true => String::new(),
+            false => format!("  ({})", marks.join(", ")),
+        };
         Some(format!(
-            "     {}  {:>4.0} wpm  {:>5.1}%  {cite}{stopped}",
+            "     {}  {:>4.0} wpm  {:>5.1}%  {cite}{marks}",
             day(&r.at),
             r.wpm,
             r.accuracy * 100.0
@@ -912,6 +919,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::history::INCOGNITO;
     use crate::session::{Input, Session};
 
     fn summary() -> View {
@@ -996,6 +1004,11 @@ mod tests {
         assert_eq!(median(vec![]), None);
     }
 
+    /// [`render`] with every test both counted and typed.
+    fn render_all(records: &[Record], view: &View) -> String {
+        render(records, records, view)
+    }
+
     fn detailed() -> View {
         View { detailed: true, ..summary() }
     }
@@ -1019,14 +1032,14 @@ mod tests {
             record("ab cd", "ab cd", "2026-10-23T09:00:00+02:00"),
             record("ab cd", "ax", "2026-10-24T09:00:00+02:00"),
         ];
-        let out = render(&records, &summary());
+        let out = render_all(&records, &summary());
         assert!(out.contains("Tests        : 2   (1 completed)"), "{out}");
         assert!(out.contains("First / last : 2026-10-23 / 2026-10-24"));
         assert!(out.contains("Accuracy     : 85.7%  (6/7 keys)"));
         assert!(out.contains("wpm · cpm at right — per completed test"));
         assert!(!out.contains("keyboard —") && !out.contains("Worst keys"));
         assert!(!out.contains("── Fingers"));
-        let out = render(&records, &detailed());
+        let out = render_all(&records, &detailed());
         assert!(out.contains("keyboard — errors"));
         assert!(out.contains("keyboard — speed"));
         assert!(out.contains("── Worst keys"));
@@ -1036,7 +1049,7 @@ mod tests {
     #[test]
     fn plot_without_completed_tests_says_so() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
-        assert!(render(&records, &summary()).contains("(no data)"));
+        assert!(render_all(&records, &summary()).contains("(no data)"));
     }
 
     #[test]
@@ -1050,8 +1063,8 @@ mod tests {
             at("words", "2026-10-24T08:00:00+02:00"),
             at("text", "2026-10-24T09:00:00+02:00"),
         ];
-        assert!(!render(&records, &summary()).contains('\x1b'));
-        let out = render(&records, &View { colour: true, ..summary() });
+        assert!(!render_all(&records, &summary()).contains('\x1b'));
+        let out = render_all(&records, &View { colour: true, ..summary() });
         assert!(out.contains("\x1b[38;5;66m●"), "{out}");
         assert!(out.contains("\x1b[38;5;101m"), "{out}");
         assert!(out.contains("\x1b[38;5;66m●\x1b[0m words   "));
@@ -1071,8 +1084,8 @@ mod tests {
             at("text", "2026-10-24T10:00:00+02:00"),
         ];
         let by = View { by: Some(Period::Day), ..summary() };
-        assert!(!render(&records, &by).contains('\x1b'));
-        let out = render(&records, &View { colour: true, ..by });
+        assert!(!render_all(&records, &by).contains('\x1b'));
+        let out = render_all(&records, &View { colour: true, ..by });
         let mean = out.split("mean per day").nth(1).unwrap();
         assert!(mean.contains("\x1b[38;5;101m●"), "{out}");
         assert!(mean.contains("\x1b[38;5;66m─"), "{out}");
@@ -1099,11 +1112,11 @@ mod tests {
     #[test]
     fn heatmaps_are_one_tile_row_per_key_row() {
         let records = [record("ab", "ab", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, &detailed());
+        let out = render_all(&records, &detailed());
         assert!(out.contains("       A· S  D"), "{out}");
         assert!(out.contains("· clean   ░ <5%"));
         assert!(!out.contains('\x1b'), "no ANSI unless asked");
-        assert!(render(&records, &View { colour: true, ..detailed() })
+        assert!(render_all(&records, &View { colour: true, ..detailed() })
             .contains("\x1b[48;5;236;38;5;252m A \x1b[0m"));
     }
 
@@ -1143,7 +1156,7 @@ mod tests {
             record("ab cd", "ax", "2026-10-21T09:00:00+02:00"),
         ];
         let out =
-            render(&records, &View { by: Some(Period::Week), ..summary() });
+            render_all(&records, &View { by: Some(Period::Week), ..summary() });
         assert!(out.contains("── By week"), "{out}");
         assert!(
             out.contains("Week        Tests      Time   WPM  Best  Accuracy")
@@ -1159,14 +1172,14 @@ mod tests {
     fn cpm_is_shown_beside_wpm_as_five_times_it() {
         let records = [record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00")];
         let (wpm, cpm) = (records[0].wpm, records[0].wpm * 5.0);
-        let out = render(&records, &summary());
+        let out = render_all(&records, &summary());
         let line = |unit: &str, v: f64| {
             format!("{unit}          : {v:.0} mean · {v:.0} best · ")
         };
         assert!(out.contains(&line("WPM", wpm)), "{out}");
         assert!(out.contains(&line("CPM", cpm)), "{out}");
         for plot in [Plot::Steps, Plot::Dots, Plot::Ribbon] {
-            let out = render(&records, &View { plot, ..summary() });
+            let out = render_all(&records, &View { plot, ..summary() });
             let rows: Vec<&str> =
                 out.lines().filter(|l| l.contains(['┤', '┼', '└'])).collect();
             assert_eq!(rows.len(), PLOT_ROWS + 1, "{out}");
@@ -1195,7 +1208,7 @@ mod tests {
             })
             .collect();
         for plot in [Plot::Dots, Plot::Ribbon] {
-            let out = render(&records, &View { plot, ..summary() });
+            let out = render_all(&records, &View { plot, ..summary() });
             let labels: Vec<u64> = out
                 .lines()
                 .filter(|l| l.contains(['┤', '┼', '└']))
@@ -1211,7 +1224,8 @@ mod tests {
                 c == ' ' || ('\u{2800}'..='\u{28ff}').contains(&c)
             })));
         }
-        let dots = render(&records, &View { plot: Plot::Dots, ..summary() });
+        let dots =
+            render_all(&records, &View { plot: Plot::Dots, ..summary() });
         let rows = plotted(&dots);
         assert!(rows[0].ends_with('⠔') && rows[PLOT_ROWS - 1].starts_with('⠔'));
     }
@@ -1227,10 +1241,10 @@ mod tests {
             })
             .collect();
         let view = View { plot: Plot::Ribbon, ..summary() };
-        let out = render(&records, &view);
+        let out = render_all(&records, &view);
         assert!(out.contains("median and middle half of 11"), "{out}");
         assert!(!out.contains('\x1b'));
-        let out = render(&records, &View { colour: true, ..view });
+        let out = render_all(&records, &View { colour: true, ..view });
         assert!(out.contains("\x1b[38;5;239m"), "{out}");
         assert!(out.contains("\x1b[38;5;243m"), "{out}");
     }
@@ -1238,10 +1252,10 @@ mod tests {
     #[test]
     fn tests_left_out_are_counted_in_the_headers() {
         let records = [record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00")];
-        let out = render(&records, &summary());
+        let out = render_all(&records, &summary());
         assert!(out.contains("Tests        : 1\n"), "{out}");
         let left_out = LeftOut { incognito: 2, stopped: 1 };
-        let out = render(&records, &View { left_out, ..summary() });
+        let out = render_all(&records, &View { left_out, ..summary() });
         assert!(
             out.contains(
                 "Tests        : 1   (2 incognito, 1 stopped left out)"
@@ -1251,7 +1265,7 @@ mod tests {
         let mut stopped = records[0].clone();
         stopped.completed = false;
         let all = [records[0].clone(), stopped];
-        let out = render(&all, &summary());
+        let out = render_all(&all, &summary());
         assert!(out.contains("Tests        : 2   (1 completed)\n"), "{out}");
         let one = LeftOut { incognito: 3, stopped: 0 };
         assert_eq!(
@@ -1269,7 +1283,7 @@ mod tests {
     fn a_period_without_completed_tests_shows_dashes() {
         let records = [record("ab", "x", "2026-10-24T09:00:00+02:00")];
         let out =
-            render(&records, &View { by: Some(Period::Day), ..summary() });
+            render_all(&records, &View { by: Some(Period::Day), ..summary() });
         let row =
             out.lines().find(|l| l.starts_with("     2026-10-24")).unwrap();
         assert!(row.contains("   —     —"), "{row}");
@@ -1282,38 +1296,49 @@ mod tests {
             r.meta.cite = Some(cite.to_string());
             r
         };
+        let mut hidden =
+            cited("ab", "ab", "2026-10-25T09:00:00+02:00", "Hugo, Notre");
+        hidden.flags.set(INCOGNITO, true);
+        let mut both = cited("ab", "a", "2026-10-26T09:00:00+02:00", "Woolf");
+        both.flags.set(INCOGNITO, true);
         let records = [
             cited("ab", "ab", "2026-10-22T09:00:00+02:00", "Austen, Emma"),
             record("ab", "ab", "2026-10-23T09:00:00+02:00"),
             cited("ab cd", "ab", "2026-10-24T09:00:00+02:00", "Gogol, Nos"),
+            hidden,
+            both,
         ];
-        let out = render(&records, &summary());
+        let out = render(&records[..2], &records, &summary());
         let texts = out.split("── Recent texts").nth(1).unwrap();
-        let lines: Vec<&str> = texts.lines().skip(1).take(2).collect();
-        assert!(lines[0].starts_with("     2026-10-24"), "{out}");
-        assert!(lines[0].ends_with("Gogol, Nos  (stopped)"), "{out}");
-        assert!(lines[1].starts_with("     2026-10-22"), "{out}");
-        assert!(lines[1].ends_with("100.0%  Austen, Emma"), "{out}");
-        let plain = render(&records[1..2], &summary());
+        let lines: Vec<&str> = texts.lines().skip(1).take(4).collect();
+        assert!(lines[0].ends_with("Woolf  (incognito, stopped)"), "{out}");
+        assert!(lines[1].starts_with("     2026-10-25"), "{out}");
+        assert!(lines[1].ends_with("Hugo, Notre  (incognito)"), "{out}");
+        assert!(lines[2].starts_with("     2026-10-24"), "{out}");
+        assert!(lines[2].ends_with("Gogol, Nos  (stopped)"), "{out}");
+        assert!(lines[3].starts_with("     2026-10-22"), "{out}");
+        assert!(lines[3].ends_with("100.0%  Austen, Emma"), "{out}");
+        assert!(out.contains("Tests        : 2\n"), "counts only the first");
+        let plain = render_all(&records[1..2], &summary());
         assert!(!plain.contains("Recent texts"));
     }
 
     #[test]
     fn rhythm_shows_mean_spread_and_variation() {
         let records = [record("ab cd", "ab cd", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, &summary());
+        let out = render_all(&records, &summary());
         assert!(
             out.contains("Rhythm       : 150 ms ± 0 ms  (0% variation)"),
             "{out}"
         );
         let one = [record("a", "a", "2026-10-24T09:00:00+02:00")];
-        assert!(!render(&one, &summary()).contains("Rhythm"));
+        assert!(!render_all(&one, &summary()).contains("Rhythm"));
     }
 
     #[test]
     fn geometry_replaces_heatmaps_with_finger_row_and_move_tables() {
         let records = [record("de fj", "de fj", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, &View { geometry: true, ..summary() });
+        let out = render_all(&records, &View { geometry: true, ..summary() });
         for needle in [
             "── Fingers",
             "Finger        Keys   Share   Miss    Mean",
@@ -1333,7 +1358,7 @@ mod tests {
         assert!(out.contains("wpm · cpm at right — per completed test"));
         assert!(!out.contains("keyboard —") && !out.contains("Worst keys"));
         let both = View { geometry: true, ..detailed() };
-        let out = render(&records, &both);
+        let out = render_all(&records, &both);
         let at = |needle| out.find(needle).unwrap_or_else(|| panic!("{out}"));
         assert!(at("Worst keys") < at("── Fingers"), "details, then geometry");
     }
@@ -1341,7 +1366,7 @@ mod tests {
     #[test]
     fn geometry_without_same_finger_bigrams_says_none() {
         let records = [record("fj", "fj", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, &View { geometry: true, ..summary() });
+        let out = render_all(&records, &View { geometry: true, ..summary() });
         let tail = out.split("── Same-finger bigrams").nth(1).unwrap();
         assert!(tail.contains("(none)"), "{out}");
     }
@@ -1349,7 +1374,7 @@ mod tests {
     #[test]
     fn geometry_ends_on_the_standard_fingering_alone_when_data_is_thin() {
         let records = [record("fj", "fj", "2026-10-24T09:00:00+02:00")];
-        let out = render(&records, &View { geometry: true, ..summary() });
+        let out = render_all(&records, &View { geometry: true, ..summary() });
         let tail = out.split("fingers — standard").nth(1).unwrap();
         assert!(tail.contains("\n          Z1 X2 C3 V4 B4 N7"), "{out}");
         assert!(tail.contains("≈ move as one   ? unresolved"), "{out}");

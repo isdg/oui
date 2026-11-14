@@ -190,7 +190,8 @@ struct TestArgs {
     /// default, so Russian text gets ЙЦУКЕН.
     #[arg(short = 'k', long, value_enum)]
     layout: Option<Layout>,
-    /// Record nothing: tests are left out of history.jsonl and `oui stats`.
+    /// Record the tests flagged incognito: `oui stats` leaves them out,
+    /// practice and -c still use them.
     #[arg(short, long, alias = "inkognito")]
     incognito: bool,
     /// Go on from where the last test of FILE, else of text mode, stopped:

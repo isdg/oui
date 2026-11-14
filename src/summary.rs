@@ -79,6 +79,52 @@ pub enum Plot {
     Ribbon,
 }
 
+/// Tests `oui stats` leaves out unless asked, by why: flagged incognito,
+/// or stopped before the end, whose keys tell of a run abandoned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LeftOut {
+    pub incognito: usize,
+    pub stopped: usize,
+}
+
+impl LeftOut {
+    /// Why `r` is left out, as a count of one, if it is.
+    pub fn test(r: &Record) -> Self {
+        match (r.incognito(), r.completed) {
+            (true, _) => LeftOut { incognito: 1, stopped: 0 },
+            (false, false) => LeftOut { incognito: 0, stopped: 1 },
+            (false, true) => LeftOut::default(),
+        }
+    }
+
+    /// As [`LeftOut::test`], of a reading test.
+    pub fn read(r: &ReadRecord) -> Self {
+        LeftOut { incognito: usize::from(r.incognito()), stopped: 0 }
+    }
+
+    pub fn total(self) -> usize {
+        self.incognito + self.stopped
+    }
+
+    /// "12 incognito, 3 stopped left out", or `None` if nothing was.
+    pub fn note(self) -> Option<String> {
+        let counts = [(self.incognito, "incognito"), (self.stopped, "stopped")];
+        let named: Vec<String> = counts
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, why)| format!("{n} {why}"))
+            .collect();
+        (!named.is_empty()).then(|| format!("{} left out", named.join(", ")))
+    }
+}
+
+impl std::ops::AddAssign for LeftOut {
+    fn add_assign(&mut self, other: Self) {
+        self.incognito += other.incognito;
+        self.stopped += other.stopped;
+    }
+}
+
 /// What `oui stats` shows beyond the summary, and how.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct View {
@@ -90,10 +136,10 @@ pub struct View {
     pub by: Option<Period>,
     /// How WPM over time is drawn.
     pub plot: Plot,
-    /// Counts the tests flagged incognito too.
-    pub incognito: bool,
-    /// Tests flagged incognito kept out of the records, to say so.
-    pub left_out: usize,
+    /// Counts every test, those [`LeftOut`] names too.
+    pub all: bool,
+    /// The tests kept out of the records, to say so.
+    pub left_out: LeftOut,
     /// Adds the heatmaps and the key and bigram rankings.
     pub detailed: bool,
     /// Adds the fingers, rows and hand moves.
@@ -109,13 +155,15 @@ pub fn render(records: &[Record], view: &View) -> String {
 
     let mut out = String::new();
     out.push_str("\n     ── History ─────────────────────────\n");
-    let _ = writeln!(
-        out,
-        "     Tests        : {}   ({} completed{})",
-        records.len(),
-        wpms.len(),
-        incognito(view.left_out)
-    );
+    let stopped = (wpms.len() < records.len())
+        .then(|| format!("{} completed", wpms.len()));
+    let notes: Vec<String> =
+        stopped.into_iter().chain(view.left_out.note()).collect();
+    let notes = match notes.is_empty() {
+        true => String::new(),
+        false => format!("   ({})", notes.join(", ")),
+    };
+    let _ = writeln!(out, "     Tests        : {}{notes}", records.len());
     if let (Some(first), Some(last)) = (records.first(), records.last()) {
         let (first, last) = (day(&first.at), day(&last.at));
         let _ = writeln!(out, "     First / last : {first} / {last}");
@@ -462,17 +510,15 @@ fn period_table(groups: &[(String, Vec<&Record>)], period: Period) -> String {
 }
 
 /// The reading tests: how well they were taken in, then the speed of
-/// those that count, per text and kind of text; nothing without tests.
-/// The reading tests; `left_out` more were flagged incognito.
-pub fn reading(records: &[ReadRecord], left_out: usize) -> String {
+/// those that count, per text and kind of text; nothing without tests,
+/// unless some were `left_out`.
+pub fn reading(records: &[ReadRecord], left_out: LeftOut) -> String {
     const HEADER: &str = "\n     ── Reading ─────────────────────────\n";
+    let note = left_out.note();
     if records.is_empty() {
-        return match left_out {
-            0 => String::new(),
-            n => format!(
-                "{HEADER}     Tests        : 0   ({n} incognito \
-                          left out)\n"
-            ),
+        return match note {
+            None => String::new(),
+            Some(n) => format!("{HEADER}     Tests        : 0   ({n})\n"),
         };
     }
     let add = |(a, b): (usize, usize), (c, d)| (a + c, b + d);
@@ -491,7 +537,7 @@ pub fn reading(records: &[ReadRecord], left_out: usize) -> String {
         "     Tests        : {}   ({counting} count, at {:.0}% right{})",
         records.len(),
         PASS * 100.0,
-        incognito(left_out)
+        note.map_or_else(String::new, |n| format!(", {n}"))
     );
     let time = hms(Duration::from_millis(ms));
     let _ = writeln!(out, "     Time reading : {time}");
@@ -538,14 +584,6 @@ pub fn reading(records: &[ReadRecord], left_out: usize) -> String {
         );
     }
     out
-}
-
-/// How many tests flagged incognito were left out, if any.
-fn incognito(left_out: usize) -> String {
-    match left_out {
-        0 => String::new(),
-        n => format!(", {n} incognito left out"),
-    }
 }
 
 fn percent(part: usize, whole: usize) -> String {
@@ -926,7 +964,7 @@ mod tests {
             read("book.txt", true, 900.0, 4),
             read("english", false, 250.0, 9),
         ];
-        let out = reading(&records, 0);
+        let out = reading(&records, LeftOut::default());
         assert!(out.contains("Tests        : 4   (3 count, at 80% right)"));
         assert!(out.contains("Time reading : 0:08:00"), "{out}");
         assert!(out.contains("Recognised   : 78%  (31/40)"), "{out}");
@@ -937,14 +975,17 @@ mod tests {
         };
         assert_eq!(row("book.txt · running"), "3 2 250 200 73%", "{out}");
         assert_eq!(row("english · excerpts"), "1 1 250 200 90%", "{out}");
-        assert_eq!(reading(&[], 0), "");
+        assert_eq!(reading(&[], LeftOut::default()), "");
         let paced = |view| {
             let pace = Some(300.0);
             ReadRecord { pace, view, ..read("b", true, 300.0, 10) }
         };
-        let out = reading(&[paced(None), paced(Some(reads::View::Blink))], 0);
+        let out = reading(
+            &[paced(None), paced(Some(reads::View::Blink))],
+            LeftOut::default(),
+        );
         assert!(out.contains("b · slide") && out.contains("b · blink"));
-        let none = reading(&records[2..3], 0);
+        let none = reading(&records[2..3], LeftOut::default());
         assert!(none.contains("1      0     —          —"), "{none}");
     }
 
@@ -1195,24 +1236,33 @@ mod tests {
     }
 
     #[test]
-    fn incognito_tests_left_out_are_counted_in_the_headers() {
+    fn tests_left_out_are_counted_in_the_headers() {
         let records = [record("ab cd", "ab cd", "2026-10-13T09:00:00+02:00")];
         let out = render(&records, &summary());
-        assert!(out.contains("Tests        : 1   (1 completed)\n"), "{out}");
-        let out = render(&records, &View { left_out: 2, ..summary() });
+        assert!(out.contains("Tests        : 1\n"), "{out}");
+        let left_out = LeftOut { incognito: 2, stopped: 1 };
+        let out = render(&records, &View { left_out, ..summary() });
         assert!(
             out.contains(
-                "Tests        : 1   (1 completed, 2 incognito left out)"
+                "Tests        : 1   (2 incognito, 1 stopped left out)"
             ),
             "{out}"
         );
+        let mut stopped = records[0].clone();
+        stopped.completed = false;
+        let all = [records[0].clone(), stopped];
+        let out = render(&all, &summary());
+        assert!(out.contains("Tests        : 2   (1 completed)\n"), "{out}");
+        let one = LeftOut { incognito: 3, stopped: 0 };
         assert_eq!(
-            reading(&[], 3),
+            reading(&[], one),
             "\n     ── Reading ─────────────────────────\n     \
              Tests        : 0   (3 incognito left out)\n"
         );
-        let read = reading(&[reads::tests::record("t")], 1);
+        let one = LeftOut { incognito: 1, stopped: 0 };
+        let read = reading(&[reads::tests::record("t")], one);
         assert!(read.contains("at 80% right, 1 incognito left out)"), "{read}");
+        assert_eq!(LeftOut::default().note(), None);
     }
 
     #[test]

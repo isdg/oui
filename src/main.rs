@@ -26,7 +26,7 @@ use oui::practice::{self, Target};
 use oui::reads::ReadRecord;
 use oui::session::{Input, Session};
 use oui::stats::Report;
-use oui::summary::{self, Period, Plot, View};
+use oui::summary::{self, LeftOut, Period, Plot, View};
 use oui::ui;
 use oui::ui::reader::{Reading, Scroll};
 use oui::ui::results::Keys;
@@ -109,9 +109,10 @@ enum Cmd {
         /// How WPM over time is drawn.
         #[arg(long, value_enum, default_value_t)]
         plot: Plot,
-        /// Count the tests flagged incognito too.
-        #[arg(long)]
-        incognito: bool,
+        /// Count every test: those flagged incognito and those stopped
+        /// before the end too.
+        #[arg(long, alias = "incognito")]
+        all: bool,
         /// Add the heatmaps and the key and bigram rankings.
         #[arg(short, long)]
         detailed: bool,
@@ -628,19 +629,13 @@ fn main() -> Result<()> {
             layout,
             by,
             plot,
-            incognito,
+            all,
             detailed,
             geometry,
             practice,
         }) => {
-            let view = View {
-                by,
-                plot,
-                incognito,
-                detailed,
-                geometry,
-                ..View::default()
-            };
+            let view =
+                View { by, plot, all, detailed, geometry, ..View::default() };
             stats(&store, last, source.as_deref(), layout, view)?;
             if practice {
                 practice_summary(&store, last, source.as_deref())?;
@@ -721,18 +716,16 @@ fn stats(
             path.display()
         );
     }
-    let all = view.incognito;
+    let all = view.all;
     let records = select(history.records, last, source);
-    let (records, left_out) = counted(records, all, Record::incognito);
+    let (records, left_out) = counted(records, all, LeftOut::test);
     let reads = reads(store.load_reads()?.records, last, source);
-    let (reads, reads_left) = counted(reads, all, ReadRecord::incognito);
+    let (reads, reads_left) = counted(reads, all, LeftOut::read);
     view.left_out = left_out;
     if records.is_empty() {
-        if left_out > 0 {
-            println!(
-                "only incognito tests ({left_out}): --incognito counts them"
-            );
-        } else if reads.is_empty() && reads_left == 0 {
+        if let Some(note) = left_out.note() {
+            println!("no tests to count ({note}): --all counts them");
+        } else if reads.is_empty() && reads_left.total() == 0 {
             let history = store.history();
             println!("no tests recorded in {}", history.display());
         }
@@ -750,18 +743,21 @@ fn stats(
     Ok(())
 }
 
-/// `records` but those `flagged` incognito, unless `all`; how many went.
+/// `records` but those stats leave out, unless `all`; those it did.
 fn counted<T>(
     mut records: Vec<T>,
     all: bool,
-    flagged: fn(&T) -> bool,
-) -> (Vec<T>, usize) {
-    let before = records.len();
+    why: fn(&T) -> LeftOut,
+) -> (Vec<T>, LeftOut) {
+    let mut out = LeftOut::default();
     if !all {
-        records.retain(|r| !flagged(r));
+        records.retain(|r| {
+            let left = why(r);
+            out += left;
+            left.total() == 0
+        });
     }
-    let gone = before - records.len();
-    (records, gone)
+    (records, out)
 }
 
 /// The reading tests of `source` (all if `None`), the last `last` of them.
@@ -1556,14 +1552,16 @@ mod tests {
                 layout: None,
                 by: None,
                 plot: Plot::Steps,
-                incognito: false,
+                all: false,
                 detailed: false,
                 geometry: false,
                 practice: false,
             })
         );
-        let all = parse(&["stats", "--incognito"]).unwrap().cmd;
-        assert!(matches!(all, Some(Cmd::Stats { incognito: true, .. })));
+        for flag in ["--all", "--incognito"] {
+            let all = parse(&["stats", flag]).unwrap().cmd;
+            assert!(matches!(all, Some(Cmd::Stats { all: true, .. })));
+        }
         let ribbon = parse(&["stats", "--plot", "ribbon"]).unwrap().cmd;
         assert!(matches!(ribbon, Some(Cmd::Stats { plot: Plot::Ribbon, .. })));
         assert!(parse(&["stats", "-w", "10"]).is_err());
@@ -2111,11 +2109,29 @@ mod tests {
     }
 
     #[test]
-    fn counted_leaves_out_the_flagged_unless_all() {
-        let flagged = |n: &u8| *n > 1;
-        assert_eq!(counted(vec![1, 2, 3, 1], false, flagged), (vec![1, 1], 2));
-        assert_eq!(counted(vec![1, 2], true, flagged), (vec![1, 2], 0));
-        assert_eq!(counted(Vec::new(), false, flagged), (vec![], 0));
+    fn counted_leaves_out_incognito_and_stopped_unless_all() {
+        let tmp = TempDir::new("counted");
+        let store = Store::at(&tmp.0);
+        let setup = test_setup(words("ab cd"), Limit::Words(2));
+        let mut app = App::new(setup, Some(store.clone()));
+        for keys in ["ab cd", "a"] {
+            keys.chars().for_each(|c| _ = press(&mut app, KeyCode::Char(c)));
+            press(&mut app, KeyCode::Esc);
+            press(&mut app, KeyCode::Char('r'));
+        }
+        let mut records = store.load().unwrap().records;
+        assert_eq!(records.len(), 2);
+        let mut flagged = records[0].clone();
+        flagged.flags.set(INCOGNITO, true);
+        records.push(flagged);
+        let (kept, out) = counted(records.clone(), false, LeftOut::test);
+        assert!(kept.iter().all(|r| r.completed && !r.incognito()));
+        assert_eq!(
+            (kept.len(), out),
+            (1, LeftOut { incognito: 1, stopped: 1 })
+        );
+        let (kept, out) = counted(records, true, LeftOut::test);
+        assert_eq!((kept.len(), out), (3, LeftOut::default()));
     }
 
     #[test]

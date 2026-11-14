@@ -287,7 +287,8 @@ random words, or the whole text for a file; `-t` switches to a timed test.
 - A record may carry `flags`, plain strings so ones a build does not know
   survive a rewrite. `incognito` (`-i`, or `i` on the results, which
   rewrites the line in place) keeps a test out of `oui stats` unless
-  `--incognito`; practice and `-c` still use it, and nothing is deleted.
+  `--all`, as stopping it with esc does, its keys telling of a run
+  abandoned; practice and `-c` still use both, and nothing is deleted.
   Older builds ignore the field and count such tests.
 - `oui stats` combines the records: a `plc stat`-style block, WPM per test
   and the recent texts; `--detailed` adds both heatmaps over every

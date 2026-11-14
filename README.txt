@@ -219,8 +219,10 @@ HISTORY AND STATS
 Every test that saw a keystroke is appended to ~/.oui/history.jsonl as it
 ends: a summary plus the raw keystrokes, so any statistic can be recomputed
 later. A test flagged incognito, by -i or by i on its results, stays in
-the history with "flags": ["incognito"]: practice and -c draw on it, oui
-stats leaves it out unless given --incognito. oui stats reads it back:
+the history with "flags": ["incognito"]. Such a test, and one stopped with
+esc before its end, is left out of oui stats unless given --all (alias
+--incognito), which says how many it left out; practice and -c draw on
+them all the same. oui stats reads it back:
 
     > oui stats                     # all tests: stats, WPM per test, texts
     > oui stats -d                  # plus heatmaps and key and bigram
@@ -228,7 +230,7 @@ stats leaves it out unless given --incognito. oui stats reads it back:
     > oui stats -n 20 -s russian    # the last 20 Russian tests
     > oui stats --by week           # a table of weeks, WPM plotted per week
     > oui stats --plot ribbon       # WPM as a median and its spread
-    > oui stats --incognito         # incognito tests counted too
+    > oui stats --all               # incognito and stopped tests too
     > oui stats --geometry          # plus fingers, rows and hand moves
     > oui stats --practice          # plus what -p targets, and its words
 
